@@ -26,28 +26,13 @@
 #ifndef NFD_DAEMON_FACE_FACE_HPP
 #define NFD_DAEMON_FACE_FACE_HPP
 
+#include "face-common.hpp"
 #include "face-counters.hpp"
-#include "face-log.hpp"
 #include "link-service.hpp"
 #include "transport.hpp"
 
 namespace nfd {
 namespace face {
-
-/** \brief identifies a face
- */
-typedef uint64_t FaceId;
-
-/// indicates an invalid FaceId
-const FaceId INVALID_FACEID = 0;
-/// identifies the InternalFace used in management
-const FaceId FACEID_INTERNAL_FACE = 1;
-/// identifies a packet comes from the ContentStore
-const FaceId FACEID_CONTENT_STORE = 254;
-/// identifies the NullFace that drops every packet
-const FaceId FACEID_NULL = 255;
-/// upper bound of reserved FaceIds
-const FaceId FACEID_RESERVED_MAX = 255;
 
 /** \brief indicates the state of a face
  */
@@ -76,32 +61,32 @@ public:
   getTransport() const;
 
 public: // upper interface connected to forwarding
-  /** \brief sends Interest on Face
+  /** \brief send Interest to \p endpointId
    */
   void
-  sendInterest(const Interest& interest);
+  sendInterest(const Interest& interest, const EndpointId& endpointId);
 
-  /** \brief sends Data on Face
+  /** \brief send Data to \p endpointId
    */
   void
-  sendData(const Data& data);
+  sendData(const Data& data, const EndpointId& endpointId);
 
-  /** \brief sends Nack on Face
+  /** \brief send Nack to \p endpointId
    */
   void
-  sendNack(const lp::Nack& nack);
+  sendNack(const lp::Nack& nack, const EndpointId& endpointId);
 
   /** \brief signals on Interest received
    */
-  signal::Signal<LinkService, Interest>& afterReceiveInterest;
+  signal::Signal<LinkService, Interest, EndpointId>& afterReceiveInterest;
 
   /** \brief signals on Data received
    */
-  signal::Signal<LinkService, Data>& afterReceiveData;
+  signal::Signal<LinkService, Data, EndpointId>& afterReceiveData;
 
   /** \brief signals on Nack received
    */
-  signal::Signal<LinkService, lp::Nack>& afterReceiveNack;
+  signal::Signal<LinkService, lp::Nack, EndpointId>& afterReceiveNack;
 
   /** \brief signals on Interest dropped by reliability system for exceeding allowed number of retx
    */
@@ -201,21 +186,21 @@ Face::getTransport() const
 }
 
 inline void
-Face::sendInterest(const Interest& interest)
+Face::sendInterest(const Interest& interest, const EndpointId& endpointId)
 {
-  m_service->sendInterest(interest);
+  m_service->sendInterest(interest, endpointId);
 }
 
 inline void
-Face::sendData(const Data& data)
+Face::sendData(const Data& data, const EndpointId& endpointId)
 {
-  m_service->sendData(data);
+  m_service->sendData(data, endpointId);
 }
 
 inline void
-Face::sendNack(const lp::Nack& nack)
+Face::sendNack(const lp::Nack& nack, const EndpointId& endpointId)
 {
-  m_service->sendNack(nack);
+  m_service->sendNack(nack, endpointId);
 }
 
 inline FaceId
@@ -295,8 +280,6 @@ operator<<(std::ostream& os, const FaceLogHelper<Face>& flh);
 
 } // namespace face
 
-using face::EndpointId;
-using face::FaceId;
 using face::Face;
 
 } // namespace nfd

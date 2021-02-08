@@ -33,6 +33,7 @@
 #include "table/cleanup.hpp"
 
 #include <ndn-cxx/lp/tags.hpp>
+#include <iostream>
 
 namespace nfd {
 
@@ -44,25 +45,26 @@ getDefaultStrategyName()
   return fw::BestRouteStrategy2::getStrategyName();
 }
 
-Forwarder::Forwarder()
-  : m_unsolicitedDataPolicy(make_unique<fw::DefaultUnsolicitedDataPolicy>())
+Forwarder::Forwarder(FaceTable& faceTable)
+  : m_faceTable(faceTable)
+  , m_unsolicitedDataPolicy(make_unique<fw::DefaultUnsolicitedDataPolicy>())
   , m_fib(m_nameTree)
   , m_pit(m_nameTree)
   , m_measurements(m_nameTree)
   , m_strategyChoice(*this)
 {
-  m_faceTable.afterAdd.connect([this] (Face& face) {
+  m_faceTable.afterAdd.connect([this] (const Face& face) {
     face.afterReceiveInterest.connect(
-      [this, &face] (const Interest& interest) {
-        this->startProcessInterest(FaceEndpoint(face, 0), interest);
+      [this, &face] (const Interest& interest, const EndpointId& endpointId) {
+        this->startProcessInterest(FaceEndpoint(face, endpointId), interest);
       });
     face.afterReceiveData.connect(
-      [this, &face] (const Data& data) {
-        this->startProcessData(FaceEndpoint(face, 0), data);
+      [this, &face] (const Data& data, const EndpointId& endpointId) {
+        this->startProcessData(FaceEndpoint(face, endpointId), data);
       });
     face.afterReceiveNack.connect(
-      [this, &face] (const lp::Nack& nack) {
-        this->startProcessNack(FaceEndpoint(face, 0), nack);
+      [this, &face] (const lp::Nack& nack, const EndpointId& endpointId) {
+        this->startProcessNack(FaceEndpoint(face, endpointId), nack);
       });
     face.onDroppedInterest.connect(
       [this, &face] (const Interest& interest) {
@@ -70,7 +72,7 @@ Forwarder::Forwarder()
       });
   });
 
-  m_faceTable.beforeRemove.connect([this] (Face& face) {
+  m_faceTable.beforeRemove.connect([this] (const Face& face) {
     cleanupOnFaceRemoval(m_nameTree, m_fib, m_pit, face);
   });
 
@@ -82,6 +84,7 @@ Forwarder::~Forwarder() = default;
 void
 Forwarder::onIncomingInterest(const FaceEndpoint& ingress, const Interest& interest)
 {
+	//std::cout << "[" << time::toIsoString(time::system_clock::now()) << "] onImcomingInterest start" << std::endl;
   // receive Interest
   NFD_LOG_DEBUG("onIncomingInterest in=" << ingress << " interest=" << interest.getName());
   interest.setTag(make_shared<lp::IncomingFaceIdTag>(ingress.face.getId()));
@@ -113,8 +116,10 @@ Forwarder::onIncomingInterest(const FaceEndpoint& ingress, const Interest& inter
     const_cast<Interest&>(interest).setForwardingHint({});
   }
 
+	//std::cout << "[" << time::toIsoString(time::system_clock::now()) << "] pit insert start" << std::endl;
   // PIT insert
   shared_ptr<pit::Entry> pitEntry = m_pit.insert(interest).first;
+	//std::cout << "[" << time::toIsoString(time::system_clock::now()) << "] pit insert end" << std::endl;
 
   // detect duplicate Nonce in PIT entry
   int dnw = fw::findDuplicateNonce(*pitEntry, interest.getNonce(), ingress.face);
@@ -157,7 +162,7 @@ Forwarder::onInterestLoop(const FaceEndpoint& ingress, const Interest& interest)
   // note: Don't enter outgoing Nack pipeline because it needs an in-record.
   lp::Nack nack(interest);
   nack.setReason(lp::NackReason::DUPLICATE);
-  ingress.face.sendNack(nack);
+  ingress.face.sendNack(nack, ingress.endpoint);
 }
 
 void
@@ -168,10 +173,7 @@ Forwarder::onContentStoreMiss(const FaceEndpoint& ingress,
   ++m_counters.nCsMisses;
 
   // insert in-record
-  // FIXME Strategies are not prepared to handle non-zero EndpointIds, so always insert
-  //       the in-record with EndpointId=0 for now. Eventually, this pipeline will need
-  //       to be refactored so that strategies can control the in-record insertion.
-  pitEntry->insertOrUpdateInRecord(ingress.face, 0, interest);
+  pitEntry->insertOrUpdateInRecord(ingress.face, interest);
 
   // set PIT expiry timer to the time that the last PIT in-record expires
   auto lastExpiring = std::max_element(pitEntry->in_begin(), pitEntry->in_end(),
@@ -198,7 +200,9 @@ Forwarder::onContentStoreMiss(const FaceEndpoint& ingress,
 
   // dispatch to strategy: after incoming Interest
   this->dispatchToStrategy(*pitEntry,
-    [&] (fw::Strategy& strategy) { strategy.afterReceiveInterest(ingress, interest, pitEntry); });
+    [&] (fw::Strategy& strategy) {
+      strategy.afterReceiveInterest(FaceEndpoint(ingress.face, 0), interest, pitEntry);
+    });
 }
 
 void
@@ -229,10 +233,10 @@ Forwarder::onOutgoingInterest(const shared_ptr<pit::Entry>& pitEntry,
   NFD_LOG_DEBUG("onOutgoingInterest out=" << egress << " interest=" << pitEntry->getName());
 
   // insert out-record
-  pitEntry->insertOrUpdateOutRecord(egress.face, egress.endpoint, interest);
+  pitEntry->insertOrUpdateOutRecord(egress.face, interest);
 
   // send Interest
-  egress.face.sendInterest(interest);
+  egress.face.sendInterest(interest, egress.endpoint);
   ++m_counters.nOutInterests;
 }
 
@@ -276,7 +280,12 @@ Forwarder::onIncomingData(const FaceEndpoint& ingress, const Data& data)
   }
 
   // PIT match
-  pit::DataMatchResult pitMatches = m_pit.findAllDataMatches(data);
+  pit::DataMatchResult pitMatches;
+	if (data.getName().isDecentName(data.getName())) {
+		pitMatches = m_pit.findAllDataMatchesDecent(data);
+	} else {
+		pitMatches = m_pit.findAllDataMatches(data);
+	}
   if (pitMatches.size() == 0) {
     // goto Data unsolicited pipeline
     this->onDataUnsolicited(ingress, data);
@@ -291,6 +300,10 @@ Forwarder::onIncomingData(const FaceEndpoint& ingress, const Data& data)
     auto& pitEntry = pitMatches.front();
 
     NFD_LOG_DEBUG("onIncomingData matching=" << pitEntry->getName());
+#if 0
+		if (pitEntry->getName().getPrefix(1).toUri().compare("/decent") == 0)
+			std::cout << "[" << ndn::time::GetTimeMillis() << "] PIT Data matching : " << pitEntry->getName().toUri().c_str() << std::endl;
+#endif
 
     // set PIT expiry timer to now
     this->setExpiryTimer(pitEntry, 0_ms);
@@ -307,7 +320,7 @@ Forwarder::onIncomingData(const FaceEndpoint& ingress, const Data& data)
     this->insertDeadNonceList(*pitEntry, &ingress.face);
 
     // delete PIT entry's out-record
-    pitEntry->deleteOutRecord(ingress.face, ingress.endpoint);
+    pitEntry->deleteOutRecord(ingress.face);
   }
   // when more than one PIT entry is matched, trigger strategy: before satisfy Interest,
   // and send Data to all matched out faces
@@ -321,7 +334,7 @@ Forwarder::onIncomingData(const FaceEndpoint& ingress, const Data& data)
       // remember pending downstreams
       for (const pit::InRecord& inRecord : pitEntry->getInRecords()) {
         if (inRecord.getExpiry() > now) {
-          pendingDownstreams.emplace(&inRecord.getFace(), inRecord.getEndpointId());
+          pendingDownstreams.emplace(&inRecord.getFace(), 0);
         }
       }
 
@@ -341,7 +354,7 @@ Forwarder::onIncomingData(const FaceEndpoint& ingress, const Data& data)
 
       // clear PIT entry's in and out records
       pitEntry->clearInRecords();
-      pitEntry->deleteOutRecord(ingress.face, ingress.endpoint);
+      pitEntry->deleteOutRecord(ingress.face);
     }
 
     // foreach pending downstream
@@ -371,7 +384,7 @@ Forwarder::onDataUnsolicited(const FaceEndpoint& ingress, const Data& data)
 }
 
 void
-Forwarder::onOutgoingData(const Data& data, FaceEndpoint egress)
+Forwarder::onOutgoingData(const Data& data, const FaceEndpoint& egress)
 {
   if (egress.face.getId() == face::INVALID_FACEID) {
     NFD_LOG_WARN("onOutgoingData out=(invalid) data=" << data.getName());
@@ -391,7 +404,7 @@ Forwarder::onOutgoingData(const Data& data, FaceEndpoint egress)
   // TODO traffic manager
 
   // send Data
-  egress.face.sendData(data);
+  egress.face.sendData(data, egress.endpoint);
   ++m_counters.nOutData;
 }
 
@@ -420,7 +433,7 @@ Forwarder::onIncomingNack(const FaceEndpoint& ingress, const lp::Nack& nack)
   }
 
   // has out-record?
-  auto outRecord = pitEntry->getOutRecord(ingress.face, ingress.endpoint);
+  auto outRecord = pitEntry->getOutRecord(ingress.face);
   // if no out-record found, drop
   if (outRecord == pitEntry->out_end()) {
     NFD_LOG_DEBUG("onIncomingNack in=" << ingress << " nack=" << nack.getInterest().getName()
@@ -463,7 +476,7 @@ Forwarder::onOutgoingNack(const shared_ptr<pit::Entry>& pitEntry,
   }
 
   // has in-record?
-  auto inRecord = pitEntry->getInRecord(egress.face, egress.endpoint);
+  auto inRecord = pitEntry->getInRecord(egress.face);
 
   // if no in-record found, drop
   if (inRecord == pitEntry->in_end()) {
@@ -490,10 +503,10 @@ Forwarder::onOutgoingNack(const shared_ptr<pit::Entry>& pitEntry,
   nackPkt.setHeader(nack);
 
   // erase in-record
-  pitEntry->deleteInRecord(egress.face, egress.endpoint);
+  pitEntry->deleteInRecord(egress.face);
 
   // send Nack on face
-  egress.face.sendNack(nackPkt);
+  egress.face.sendNack(nackPkt, egress.endpoint);
   ++m_counters.nOutNacks;
 }
 
@@ -538,7 +551,7 @@ Forwarder::insertDeadNonceList(pit::Entry& pitEntry, Face* upstream)
   }
   else {
     // insert outgoing Nonce of a specific face
-    auto outRecord = pitEntry.getOutRecord(*upstream, 0);
+    auto outRecord = pitEntry.getOutRecord(*upstream);
     if (outRecord != pitEntry.getOutRecords().end()) {
       m_deadNonceList.add(pitEntry.getName(), outRecord->getLastNonce());
     }

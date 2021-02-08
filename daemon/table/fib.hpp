@@ -76,6 +76,13 @@ public: // lookup
   const Entry&
   findLongestPrefixMatch(const measurements::Entry& measurementsEntry) const;
 
+  /** \brief Performs a longest prefix match
+   *
+   *  This is equivalent to `findLongestPrefixMatchDecent(pitEntry.getName())`
+   */
+	const Entry&
+	findLongestPrefixMatchDecent(const pit::Entry& pitEntry) const;
+
   /** \brief Performs an exact match lookup
    */
   Entry*
@@ -97,21 +104,36 @@ public: // mutation
   std::pair<Entry*, bool>
   insert(const Name& prefix);
 
+  /** \brief Find or insert a FIB entry for Decent
+   *  \param prefix FIB entry name; it must not have more than \c getMaxDepth() components.
+   *  \return the entry, and true for new entry or false for existing entry
+   */
+  std::pair<Entry*, bool>
+  insertDecent(const Name& prefix);
+
   void
   erase(const Name& prefix);
 
   void
   erase(const Entry& entry);
 
-  /** \brief Remove the NextHop record for the given \p face and \p endpointId
+  /** \brief Add a NextHop record
+   *
+   *  If a NextHop record for \p face already exists in \p entry, its cost is set to \p cost.
    */
   void
-  removeNextHop(Entry& entry, const Face& face, EndpointId endpointId);
+  addOrUpdateNextHop(Entry& entry, Face& face, uint64_t cost);
 
-  /** \brief Remove all NextHop records for \p face
+  enum class RemoveNextHopResult {
+    NO_SUCH_NEXTHOP, ///< the nexthop is not found
+    NEXTHOP_REMOVED, ///< the nexthop is removed and the fib entry stays
+    FIB_ENTRY_REMOVED ///< the nexthop is removed and the fib entry is removed
+  };
+
+  /** \brief Remove the NextHop record for \p face from \p entry
    */
-  void
-  removeNextHopByFace(Entry& entry, const Face& face);
+  RemoveNextHopResult
+  removeNextHop(Entry& entry, const Face& face);
 
 public: // enumeration
   typedef boost::transformed_range<name_tree::GetTableEntry<Entry>, const name_tree::Range> Range;
@@ -137,6 +159,11 @@ public: // enumeration
     return this->getRange().end();
   }
 
+public: // signal
+  /** \brief signals on Fib entry nexthop creation
+   */
+  signal::Signal<Fib, Name, NextHop> afterNewNextHop;
+
 private:
   /** \tparam K a parameter acceptable to NameTree::findLongestPrefixMatch
    */
@@ -146,11 +173,6 @@ private:
 
   void
   erase(name_tree::Entry* nte, bool canDeleteNte = true);
-
-  /** \brief Erase \p entry if it contains no nexthop records
-   */
-  void
-  eraseIfEmpty(Entry& entry);
 
   Range
   getRange() const;

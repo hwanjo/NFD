@@ -43,27 +43,25 @@ class BestRouteStrategy2Fixture : public GlobalIoTimeFixture
 {
 protected:
   BestRouteStrategy2Fixture()
-    : strategy(forwarder)
-    , fib(forwarder.getFib())
-    , pit(forwarder.getPit())
-    , face1(make_shared<DummyFace>())
+    : face1(make_shared<DummyFace>())
     , face2(make_shared<DummyFace>())
     , face3(make_shared<DummyFace>())
     , face4(make_shared<DummyFace>())
     , face5(make_shared<DummyFace>())
   {
-    forwarder.addFace(face1);
-    forwarder.addFace(face2);
-    forwarder.addFace(face3);
-    forwarder.addFace(face4);
-    forwarder.addFace(face5);
+    faceTable.add(face1);
+    faceTable.add(face2);
+    faceTable.add(face3);
+    faceTable.add(face4);
+    faceTable.add(face5);
   }
 
-public:
-  Forwarder forwarder;
-  BestRouteStrategy2Tester strategy;
-  Fib& fib;
-  Pit& pit;
+protected:
+  FaceTable faceTable;
+  Forwarder forwarder{faceTable};
+  BestRouteStrategy2Tester strategy{forwarder};
+  Fib& fib{forwarder.getFib()};
+  Pit& pit{forwarder.getPit()};
 
   shared_ptr<DummyFace> face1;
   shared_ptr<DummyFace> face2;
@@ -77,9 +75,9 @@ BOOST_FIXTURE_TEST_SUITE(TestBestRouteStrategy2, BestRouteStrategy2Fixture)
 BOOST_AUTO_TEST_CASE(Forward)
 {
   fib::Entry& fibEntry = *fib.insert(Name()).first;
-  fibEntry.addOrUpdateNextHop(*face1, 0, 10);
-  fibEntry.addOrUpdateNextHop(*face2, 0, 20);
-  fibEntry.addOrUpdateNextHop(*face3, 0, 30);
+  fib.addOrUpdateNextHop(fibEntry, *face1, 10);
+  fib.addOrUpdateNextHop(fibEntry, *face2, 20);
+  fib.addOrUpdateNextHop(fibEntry, *face3, 30);
 
   shared_ptr<Interest> interest = makeInterest("ndn:/BzgFBchqA");
   shared_ptr<pit::Entry> pitEntry = pit.insert(*interest).first;
@@ -89,7 +87,7 @@ BOOST_AUTO_TEST_CASE(Forward)
 
   // first Interest goes to nexthop with lowest FIB cost,
   // however face1 is downstream so it cannot be used
-  pitEntry->insertOrUpdateInRecord(*face1, 0, *interest);
+  pitEntry->insertOrUpdateInRecord(*face1, *interest);
   strategy.afterReceiveInterest(FaceEndpoint(*face1, 0), *interest, pitEntry);
   BOOST_REQUIRE_EQUAL(strategy.sendInterestHistory.size(), 1);
   BOOST_CHECK_EQUAL(strategy.sendInterestHistory.back().outFaceId, face2->getId());
@@ -101,7 +99,7 @@ BOOST_AUTO_TEST_CASE(Forward)
   time::steady_clock::TimePoint timeSentLast = time::steady_clock::now();
   std::function<void()> periodicalRetxFrom4; // let periodicalRetxFrom4 lambda capture itself
   periodicalRetxFrom4 = [&] {
-    pitEntry->insertOrUpdateInRecord(*face4, 0, *interest);
+    pitEntry->insertOrUpdateInRecord(*face4, *interest);
     strategy.afterReceiveInterest(FaceEndpoint(*face4, 0), *interest, pitEntry);
 
     size_t nSent = strategy.sendInterestHistory.size();
@@ -128,12 +126,12 @@ BOOST_AUTO_TEST_CASE(Forward)
   BOOST_CHECK_EQUAL(strategy.sendInterestHistory[4].outFaceId, face1->getId());
   BOOST_CHECK_EQUAL(strategy.sendInterestHistory[5].outFaceId, face3->getId());
 
-  fibEntry.removeNextHop(*face1, 0);
+  fib.removeNextHop(fibEntry, *face1);
 
   strategy.sendInterestHistory.clear();
   for (int i = 0; i < 3; ++i) {
     this->advanceClocks(TICK, BestRouteStrategy2::RETX_SUPPRESSION_MAX * 2);
-    pitEntry->insertOrUpdateInRecord(*face5, 0, *interest);
+    pitEntry->insertOrUpdateInRecord(*face5, *interest);
     strategy.afterReceiveInterest(FaceEndpoint(*face5, 0), *interest, pitEntry);
   }
   BOOST_REQUIRE_EQUAL(strategy.sendInterestHistory.size(), 3);

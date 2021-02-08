@@ -76,7 +76,15 @@ public:
   std::pair<shared_ptr<Entry>, bool>
   insert(const Interest& interest)
   {
-    return this->findOrInsert(interest, true);
+		if (interest.getName().isDecentName(interest.getName())) {
+			if (interest.getDecentName().empty()) {
+				return this->findOrInsertDecent(interest, true, interest.getName());
+			} else {
+				return this->findOrInsertDecent(interest, true, interest.getDecentName());
+			}
+		} else {
+			return this->findOrInsert(interest, true);
+		}
   }
 
   /** \brief Performs a Data match
@@ -84,6 +92,12 @@ public:
    */
   DataMatchResult
   findAllDataMatches(const Data& data) const;
+
+  /** \brief Performs a Decent Data match
+   *  \return an iterable of all PIT entries matching \p data
+   */
+  DataMatchResult
+  findAllDataMatchesDecent(const Data& data) const;
 
   /** \brief Deletes an entry
    */
@@ -93,10 +107,10 @@ public:
     this->erase(entry, true);
   }
 
-  /** \brief Deletes all in-records and out-records for \p face
+  /** \brief Deletes in-records and out-records for \p face
    */
   void
-  deleteInOutRecordsByFace(Entry* entry, const Face& face);
+  deleteInOutRecords(Entry* entry, const Face& face);
 
 public: // enumeration
   typedef Iterator const_iterator;
@@ -132,6 +146,20 @@ private:
    */
   std::pair<shared_ptr<Entry>, bool>
   findOrInsert(const Interest& interest, bool allowInsert);
+
+  /** \brief Finds or inserts a PIT entry for \p Decent interest
+   *  \param interest the Interest; must be created with make_shared if allowInsert
+   *  \param allowInsert whether inserting a new entry is allowed
+   *  \return if allowInsert, a new or existing entry with same Name+Selectors,
+   *          and true for new entry, false for existing entry;
+   *          if not allowInsert, an existing entry with same Name+Selectors and false,
+   *          or `{nullptr, true}` if there's no existing entry
+   */
+  std::pair<shared_ptr<Entry>, bool>
+  findOrInsertDecent(const Interest& interest, bool allowInsert, Name name);
+
+  std::pair<shared_ptr<Entry>, bool>
+  findOrInsertDecent(const Interest& interest, bool allowInsert, DecentName name);
 
 private:
   NameTree& m_nameTree;

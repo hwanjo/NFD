@@ -61,6 +61,9 @@ public:
   explicit
   Entry(const Interest& interest);
 
+  explicit
+  Entry(const Interest& interest, const Name& decentName);
+
   /** \return the representative Interest of the PIT entry
    *  \note Every Interest in in-records and out-records should have same Name and Selectors
    *        as the representative Interest.
@@ -78,6 +81,14 @@ public:
   getName() const
   {
     return m_interest->getName();
+  }
+
+  /** \return Decent Name
+   */
+  const Name&
+  getDecentName() const
+  {
+    return decentName;
   }
 
   /** \return whether interest matches this entry
@@ -131,22 +142,22 @@ public: // in-record
     return m_inRecords.end();
   }
 
-  /** \brief get the in-record for \p face and \p endpointId
+  /** \brief get the in-record for \p face
    *  \return an iterator to the in-record, or in_end() if it does not exist
    */
   InRecordCollection::iterator
-  getInRecord(const Face& face, EndpointId endpointId);
+  getInRecord(const Face& face);
 
   /** \brief insert or update an in-record
    *  \return an iterator to the new or updated in-record
    */
   InRecordCollection::iterator
-  insertOrUpdateInRecord(Face& face, EndpointId endpointId, const Interest& interest);
+  insertOrUpdateInRecord(Face& face, const Interest& interest);
 
-  /** \brief delete the in-record for \p face and \p endpointId if it exists
+  /** \brief delete the in-record for \p face if it exists
    */
   void
-  deleteInRecord(const Face& face, EndpointId endpointId);
+  deleteInRecord(const Face& face);
 
   /** \brief delete all in-records
    */
@@ -198,28 +209,22 @@ public: // out-record
     return m_outRecords.end();
   }
 
-  /** \brief get the out-record for \p face and \p endpointId
+  /** \brief get the out-record for \p face
    *  \return an iterator to the out-record, or out_end() if it does not exist
    */
   OutRecordCollection::iterator
-  getOutRecord(const Face& face, EndpointId endpointId);
+  getOutRecord(const Face& face);
 
   /** \brief insert or update an out-record
    *  \return an iterator to the new or updated out-record
    */
   OutRecordCollection::iterator
-  insertOrUpdateOutRecord(Face& face, EndpointId endpointId, const Interest& interest);
+  insertOrUpdateOutRecord(Face& face, const Interest& interest);
 
-  /** \brief delete the out-record for \p face and \p endpointId if it exists
+  /** \brief delete the out-record for \p face if it exists
    */
   void
-  deleteOutRecord(const Face& face, EndpointId endpointId);
-
-public: // cleanup
-  /** \brief delete all in-records and out-records for \p face if it exists
-   */
-  void
-  deleteInOutRecordsByFace(const Face& face);
+  deleteOutRecord(const Face& face);
 
 public:
   /** \brief Expiry timer
@@ -241,6 +246,7 @@ private:
   shared_ptr<const Interest> m_interest;
   InRecordCollection m_inRecords;
   OutRecordCollection m_outRecords;
+	Name decentName;
 
   name_tree::Entry* m_nameTreeEntry = nullptr;
 

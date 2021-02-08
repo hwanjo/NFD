@@ -26,6 +26,7 @@
 #include "best-route-strategy2.hpp"
 #include "algorithm.hpp"
 #include "common/logger.hpp"
+#include <iostream>
 
 namespace nfd {
 namespace fw {
@@ -94,7 +95,16 @@ BestRouteStrategy2::afterReceiveInterest(const FaceEndpoint& ingress, const Inte
 
     auto egress = FaceEndpoint(it->getFace(), 0);
     NFD_LOG_DEBUG(interest << " from=" << ingress << " newPitEntry-to=" << egress);
+#if 0
+		Interest decentInterest = interest;
+		DecentName decentName(pitEntry->getName().toUri());
+		decentInterest.setDecentName(decentName);
+
+		//std::cout << "[" << time::toIsoString(time::system_clock::now()) << "] BestStrategy Send" << std::endl;
+		this->sendInterest(pitEntry, egress, decentInterest);
+#else
     this->sendInterest(pitEntry, egress, interest);
+#endif
     return;
   }
 

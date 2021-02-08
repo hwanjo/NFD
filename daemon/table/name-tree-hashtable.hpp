@@ -47,11 +47,17 @@ using HashSequence = std::vector<HashValue>;
 HashValue
 computeHash(const Name& name, size_t prefixLen = std::numeric_limits<size_t>::max());
 
+HashValue
+computeHash(const DecentName& name, size_t prefixLen = std::numeric_limits<size_t>::max());
+
 /** \brief computes hash values for each prefix of \p name.getPrefix(prefixLen)
  *  \return a hash sequence, where the i-th hash value equals computeHash(name, i)
  */
 HashSequence
 computeHashes(const Name& name, size_t prefixLen = std::numeric_limits<size_t>::max());
+
+HashSequence
+computeHashes(const DecentName& name, size_t prefixLen = std::numeric_limits<size_t>::max());
 
 /** \brief a hashtable node
  *
@@ -198,6 +204,9 @@ public:
   const Node*
   find(const Name& name, size_t prefixLen) const;
 
+  const Node*
+  find(const DecentName& name, size_t prefixLen) const;
+
   /** \brief find node for name.getPrefix(prefixLen)
    *  \pre name.size() > prefixLen
    *  \pre hashes == computeHashes(name)
@@ -205,12 +214,30 @@ public:
   const Node*
   find(const Name& name, size_t prefixLen, const HashSequence& hashes) const;
 
+  const Node*
+  find(const DecentName& name, size_t prefixLen, const HashSequence& hashes) const;
+
   /** \brief find or insert node for name.getPrefix(prefixLen)
    *  \pre name.size() > prefixLen
    *  \pre hashes == computeHashes(name)
    */
   std::pair<const Node*, bool>
   insert(const Name& name, size_t prefixLen, const HashSequence& hashes);
+
+  /** \brief find node for name.getPrefix(prefixLen)
+   *  \pre name.size() > prefixLen
+   */
+  const Node*
+  insert(const Name& name, size_t prefixLen) const;
+
+  const Node*
+  insert(const DecentName& name, size_t prefixLen) const;
+
+	const Node*
+	lookupHashTable(const Name& name, size_t prefixLen, const HashValue h) const;
+
+	const Node*
+	lookupHashTable(const DecentName& name, size_t prefixLen, const HashValue h) const;
 
   /** \brief delete node
    *  \pre node exists in this hashtable
@@ -231,6 +258,9 @@ private:
 
   std::pair<const Node*, bool>
   findOrInsert(const Name& name, size_t prefixLen, HashValue h, bool allowInsert);
+
+  std::pair<const Node*, bool>
+  findOrInsert(const DecentName& name, size_t prefixLen, HashValue h, bool allowInsert);
 
   void
   computeThresholds();

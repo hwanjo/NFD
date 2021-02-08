@@ -36,11 +36,11 @@ cleanupOnFaceRemoval(NameTree& nt, Fib& fib, Pit& pit, const Face& face)
   for (const name_tree::Entry& nte : nt) {
     fib::Entry* fibEntry = nte.getFibEntry();
     if (fibEntry != nullptr) {
-      fib.removeNextHopByFace(*fibEntry, face);
+      fib.removeNextHop(*fibEntry, face);
     }
 
     for (const auto& pitEntry : nte.getPitEntries()) {
-      pit.deleteInOutRecordsByFace(pitEntry.get(), face);
+      pit.deleteInOutRecords(pitEntry.get(), face);
     }
 
     if (!nte.hasTableEntries()) {

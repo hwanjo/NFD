@@ -128,6 +128,47 @@ public: // mutation
   Entry&
   lookup(const strategy_choice::Entry& strategyChoiceEntry);
 
+  /** \brief Lookup and insert a Decent entry
+   */
+  Entry*
+  lookupAndInsertDecent(const Name& name, size_t prefixLen);
+
+  /** \brief Lookup and insert a Decent PIT entry
+   */
+  Entry*
+  lookupAndInsertDecentPit(const Name& name, size_t prefixLen);
+
+  Entry*
+  lookupAndInsertDecentPit(const DecentName& name, size_t prefixLen);
+
+  /** \brief Lookup and insert a Decent entry by fastpath
+   */
+  Entry*
+  lookupAndInsertFastPath(const Name& name, size_t prefixLen);
+
+  /** \brief Lookup and insert a Decent PIT entry by fastpath
+   */
+  inline Entry*
+  lookupAndInsertFastPathPit(const Name& name, size_t prefixLen);
+
+  inline Entry*
+  lookupAndInsertFastPathPit(const DecentName& name, size_t prefixLen);
+
+  /** \brief Lookup and insert a Decent entry by slowpath
+   */
+  Entry*
+  lookupAndInsertSlowPath(const Name& name, size_t prefixLen);
+
+  /** \brief set relationship between entries(/decent/xxxxx)
+   */
+	void
+	setRelationshipFirst(Entry* parent, Entry* child, const Name& name);
+
+  /** \brief set relationship between entries(/decent/xxxxx/xxxxx)
+   */
+	void
+	setRelationshipSecond(Entry* parent, Entry* child, const Name& name);
+
   /** \brief Delete the entry if it is empty
    *  \param entry a valid entry
    *  \param canEraseAncestors whether ancestors should be deleted if they become empty
@@ -148,6 +189,9 @@ public: // matching
   Entry*
   findExactMatch(const Name& name, size_t prefixLen = std::numeric_limits<size_t>::max()) const;
 
+  Entry*
+  findExactMatch(const DecentName& name, size_t prefixLen = std::numeric_limits<size_t>::max()) const;
+
   /** \brief Longest prefix matching
    *  \return entry whose name is a prefix of \p name and passes \p entrySelector,
    *          where no other entry with a longer name satisfies those requirements;
@@ -157,12 +201,33 @@ public: // matching
   findLongestPrefixMatch(const Name& name,
                          const EntrySelector& entrySelector = AnyEntry()) const;
 
+  Entry*
+  findLongestPrefixMatch(const DecentName& name,
+                         const EntrySelector& entrySelector = AnyEntry()) const;
+
   /** \brief Equivalent to `findLongestPrefixMatch(entry.getName(), entrySelector)`
    *  \note This overload is more efficient than
    *        `findLongestPrefixMatch(const Name&, const EntrySelector&)` in common cases.
    */
   Entry*
   findLongestPrefixMatch(const Entry& entry,
+                         const EntrySelector& entrySelector = AnyEntry()) const;
+
+  /** \brief Longest Decent prefix matching
+   *  \return entry whose name is a Decent prefix of \p name and passes \p entrySelector,
+   *          where no other entry with a longer name satisfies those requirements;
+   *          or nullptr if no entry satisfying those requirements exists
+   */
+  Entry*
+  findLongestPrefixMatchDecent(const Name& name,
+                         const EntrySelector& entrySelector = AnyEntry()) const;
+
+  /** \brief Equivalent to `findLongestPrefixMatchDecent(entry.getName(), entrySelector)`
+   *  \note This overload is more efficient than
+   *        `findLongestPrefixMatchDecent(const Name&, const EntrySelector&)` in common cases.
+   */
+  Entry*
+  findLongestPrefixMatchDecent(const Entry& entry,
                          const EntrySelector& entrySelector = AnyEntry()) const;
 
   /** \brief Equivalent to `findLongestPrefixMatch(getEntry(tableEntry)->getName(), entrySelector)`
@@ -190,6 +255,10 @@ public: // matching
   findLongestPrefixMatch(const pit::Entry& pitEntry,
                          const EntrySelector& entrySelector = AnyEntry()) const;
 
+  Entry*
+  findLongestPrefixMatchDecent(const pit::Entry& pitEntry,
+                         const EntrySelector& entrySelector = AnyEntry()) const;
+
   /** \brief All-prefixes match lookup
    *  \return a range where every entry has a name that is a prefix of \p name ,
    *          and matches \p entrySelector.
@@ -211,6 +280,14 @@ public: // matching
    */
   Range
   findAllMatches(const Name& name,
+                 const EntrySelector& entrySelector = AnyEntry()) const;
+
+  Range
+  findAllMatches(const DecentName& name,
+                 const EntrySelector& entrySelector = AnyEntry()) const;
+
+  Range
+  findAllMatchesDecent(const Name& name,
                  const EntrySelector& entrySelector = AnyEntry()) const;
 
 public: // enumeration

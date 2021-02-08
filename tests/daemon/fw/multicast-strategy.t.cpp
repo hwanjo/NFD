@@ -41,23 +41,22 @@ class MulticastStrategyFixture : public GlobalIoTimeFixture
 {
 protected:
   MulticastStrategyFixture()
-    : strategy(forwarder)
-    , fib(forwarder.getFib())
-    , pit(forwarder.getPit())
-    , face1(make_shared<DummyFace>())
+    : face1(make_shared<DummyFace>())
     , face2(make_shared<DummyFace>())
     , face3(make_shared<DummyFace>())
   {
-    forwarder.addFace(face1);
-    forwarder.addFace(face2);
-    forwarder.addFace(face3);
+    faceTable.add(face1);
+    faceTable.add(face2);
+    faceTable.add(face3);
   }
 
 protected:
-  Forwarder forwarder;
-  MulticastStrategyTester strategy;
-  Fib& fib;
-  Pit& pit;
+  FaceTable faceTable;
+  Forwarder forwarder{faceTable};
+  MulticastStrategyTester strategy{forwarder};
+  Fib& fib{forwarder.getFib()};
+  Pit& pit{forwarder.getPit()};
+
   shared_ptr<DummyFace> face1;
   shared_ptr<DummyFace> face2;
   shared_ptr<DummyFace> face3;
@@ -69,13 +68,13 @@ BOOST_FIXTURE_TEST_SUITE(TestMulticastStrategy, MulticastStrategyFixture)
 BOOST_AUTO_TEST_CASE(Forward2)
 {
   fib::Entry& fibEntry = *fib.insert(Name()).first;
-  fibEntry.addOrUpdateNextHop(*face1, 0, 0);
-  fibEntry.addOrUpdateNextHop(*face2, 0, 0);
-  fibEntry.addOrUpdateNextHop(*face3, 0, 0);
+  fib.addOrUpdateNextHop(fibEntry, *face1, 0);
+  fib.addOrUpdateNextHop(fibEntry, *face2, 0);
+  fib.addOrUpdateNextHop(fibEntry, *face3, 0);
 
   shared_ptr<Interest> interest = makeInterest("ndn:/H0D6i5fc");
   shared_ptr<pit::Entry> pitEntry = pit.insert(*interest).first;
-  pitEntry->insertOrUpdateInRecord(*face3, 0, *interest);
+  pitEntry->insertOrUpdateInRecord(*face3, *interest);
 
   strategy.afterReceiveInterest(FaceEndpoint(*face3, 0), *interest, pitEntry);
   BOOST_CHECK_EQUAL(strategy.rejectPendingInterestHistory.size(), 0);
@@ -100,7 +99,7 @@ BOOST_AUTO_TEST_CASE(Forward2)
   time::steady_clock::TimePoint timeSentLast = time::steady_clock::now();
   std::function<void()> periodicalRetxFrom4; // let periodicalRetxFrom4 lambda capture itself
   periodicalRetxFrom4 = [&] {
-    pitEntry->insertOrUpdateInRecord(*face3, 0, *interest);
+    pitEntry->insertOrUpdateInRecord(*face3, *interest);
     strategy.afterReceiveInterest(FaceEndpoint(*face3, 0), *interest, pitEntry);
 
     size_t nSent = strategy.sendInterestHistory.size();
@@ -123,11 +122,11 @@ BOOST_AUTO_TEST_CASE(Forward2)
 BOOST_AUTO_TEST_CASE(RejectLoopback)
 {
   fib::Entry& fibEntry = *fib.insert(Name()).first;
-  fibEntry.addOrUpdateNextHop(*face1, 0, 0);
+  fib.addOrUpdateNextHop(fibEntry, *face1, 0);
 
   shared_ptr<Interest> interest = makeInterest("ndn:/H0D6i5fc");
   shared_ptr<pit::Entry> pitEntry = pit.insert(*interest).first;
-  pitEntry->insertOrUpdateInRecord(*face1, 0, *interest);
+  pitEntry->insertOrUpdateInRecord(*face1, *interest);
 
   strategy.afterReceiveInterest(FaceEndpoint(*face1, 0), *interest, pitEntry);
   BOOST_CHECK_EQUAL(strategy.rejectPendingInterestHistory.size(), 1);

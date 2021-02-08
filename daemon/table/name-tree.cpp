@@ -1,4 +1,3 @@
-/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /*
  * Copyright (c) 2014-2019,  Regents of the University of California,
  *                           Arizona Board of Regents,
@@ -119,6 +118,249 @@ NameTree::lookup(const strategy_choice::Entry& strategyChoiceEntry)
   return *nte;
 }
 
+Entry*
+NameTree::lookupAndInsertDecent(const Name& name, size_t prefixLen)
+{
+  NFD_LOG_TRACE("lookup(" << name << ", " << prefixLen << ')');
+  BOOST_ASSERT(prefixLen <= name.size());
+  BOOST_ASSERT(prefixLen <= getMaxDepth());
+
+	if (name.isNonPreemptibleName(name) || name.isUntaggedName(name))
+	{
+		// nonpreemptible name of untagged name
+		return lookupAndInsertFastPath(name, prefixLen);
+	}
+	else {
+		// has nonpreemptible name
+		return lookupAndInsertSlowPath(name, prefixLen);
+	}
+
+	return nullptr;
+}
+
+Entry*
+NameTree::lookupAndInsertDecentPit(const Name& name, size_t prefixLen)
+{
+  NFD_LOG_TRACE("lookup(" << name << ", " << prefixLen << ')');
+  BOOST_ASSERT(prefixLen <= name.size());
+  BOOST_ASSERT(prefixLen <= getMaxDepth());
+
+	if (name.isUntaggedName(name)) {
+		return lookupAndInsertFastPathPit(name, prefixLen);
+	} else if (name.isNonPreemptibleName(name)) {
+		return lookupAndInsertFastPathPit(name, prefixLen);
+	} else {
+		// has nonpreemptible name
+		return lookupAndInsertSlowPath(name, prefixLen);
+	}
+}
+
+Entry*
+NameTree::lookupAndInsertDecentPit(const DecentName& name, size_t prefixLen)
+{
+  NFD_LOG_TRACE("lookup(" << name << ", " << prefixLen << ')');
+  BOOST_ASSERT(prefixLen <= name.size());
+  BOOST_ASSERT(prefixLen <= getMaxDepth());
+
+	return lookupAndInsertFastPathPit(name, prefixLen);
+}
+
+Entry*
+NameTree::lookupAndInsertFastPath(const Name& name, size_t prefixLen)
+{
+	const Node* node = nullptr;
+	HashValue hash = computeHash(name, prefixLen);
+
+	node = m_ht.lookupHashTable(name, prefixLen, hash);
+
+	if (node != nullptr) {
+		if (name.isNonPreemptibleName(name)) {
+			return &node->entry;
+		} else {
+			return node->entry.getDecentHead();
+		}
+	}
+
+	Name pName = name.getSubName(0, prefixLen - 1);
+	Entry *parentTreeEntry = lookupAndInsertFastPath(pName, pName.size());
+
+	Entry *treeEntry = &lookup(name, prefixLen);
+	const Name utagName = name.decentUntag(name);
+	treeEntry->setNdnTreeEntry(&lookup(utagName));
+
+	if (parentTreeEntry->getName().toUri().compare("/decent") == 0)
+		setRelationshipFirst(parentTreeEntry, treeEntry, name);
+	else
+		setRelationshipSecond(parentTreeEntry, treeEntry, name);
+
+	return treeEntry;
+}
+
+inline Entry*
+NameTree::lookupAndInsertFastPathPit(const Name& name, size_t prefixLen)
+{
+	const Node* node = nullptr;
+	HashValue hash = computeHash(name, prefixLen);
+
+	node = m_ht.lookupHashTable(name, prefixLen, hash);
+
+	if (node != nullptr) {
+		if (name.isNonPreemptibleName(name)) {
+			return &node->entry;
+		} else {
+			return node->entry.getDecentHead();
+		}
+	}
+
+	Name pName = name.getSubName(0, prefixLen - 1);
+	Entry *parentTreeEntry = lookupAndInsertFastPathPit(pName, pName.size());
+
+	Entry *treeEntry = nullptr;
+	if (name.isUntaggedName(name)) {
+		Name cName = parentTreeEntry->getName();
+		std::string uri = name.getSubName(prefixLen-1, 1).toUri() + "#ffffffffffff";
+		cName.append(uri);
+
+		node = m_ht.insert(cName, prefixLen);
+		treeEntry = &node->entry;
+		treeEntry->setParent(*parentTreeEntry);
+	} else {
+    node = m_ht.insert(name, prefixLen);
+    treeEntry = &node->entry;
+    treeEntry->setParent(*parentTreeEntry);
+	}
+
+	return treeEntry;
+}
+
+inline Entry*
+NameTree::lookupAndInsertFastPathPit(const DecentName& name, size_t prefixLen)
+{
+	const Node* node = nullptr;
+	HashValue hash = computeHash(name, prefixLen);
+
+	node = m_ht.lookupHashTable(name, prefixLen, hash);
+
+	if (node != nullptr)
+		return &node->entry;
+
+	DecentName pName = name.getSubName(0, prefixLen - 1);
+	Entry *parentTreeEntry = lookupAndInsertFastPathPit(pName, pName.size());
+
+	Entry *treeEntry = nullptr;
+	node = m_ht.insert(name, prefixLen);
+	treeEntry = &node->entry;
+	treeEntry->setParent(*parentTreeEntry);
+
+	return treeEntry;
+}
+
+Entry*
+NameTree::lookupAndInsertSlowPath(const Name& name, size_t prefixLen)
+{
+	size_t count = name.decentNameParseCount(name);
+	const Name prefix = name.getSubName(0, count);
+	if (!prefix.isNonPreemptibleName(prefix))
+		return nullptr;
+
+	Name postfix = prefix;
+
+	Entry *treeEntry = lookupAndInsertFastPathPit(prefix, prefix.size());
+
+	for (size_t i = count; i < prefixLen; i++) {
+		std::string uri = name.getSubName(i, 1).toUri();
+		std::list<Entry*> decentList = treeEntry->getDecentMap(uri);
+		Entry *head = nullptr;
+		if (decentList.size() != 0) {
+			head = decentList.front();
+			std::string auth = head->getName().getSubName(i, 1).toUri();
+			postfix.append(auth);
+		} else {
+			std::string auth = uri + "#ffffffffffff";
+			Name newName = name.getSubName(0, i);
+			postfix.append(auth);
+			head = &lookup(postfix);
+		}
+
+		treeEntry = head;
+	}
+
+	return treeEntry;
+}
+
+bool decentSort(Entry *first, Entry *second)
+{
+	return (first->getName().toUri() < second->getName().toUri());
+}
+
+void
+NameTree::setRelationshipFirst(Entry* parent, Entry* child, const Name& name)
+{
+	Name utagName = name.decentUntag(name);
+	std::string uri = utagName.getSubName(utagName.size()-1, 1).toUri();
+
+	std::list<Entry*> decentList = parent->getDecentMap(uri);
+	if (decentList.size() != 0) {
+		Entry *first = decentList.front();
+		decentList.push_back(child);
+		decentList.sort(decentSort);
+		Entry *after = decentList.front();
+		if (first->getName().toUri().compare(after->getName().toUri()) != 0) {
+			child->setIsDecentHead(true);
+			first->setIsDecentHead(false);
+		}
+		parent->updateDecentMap(uri, decentList);
+	} else {
+		std::list<Entry*> newDecentList;
+		newDecentList.push_back(child);
+		parent->setDecentMap(uri, newDecentList);
+		child->setIsDecentHead(true);
+	}
+
+	if (child->getIsDecentHead()) {
+		parent->setDecentHead(child);
+		child->getNdnTreeEntry()->setDecentHead(child);
+	}
+}
+
+void
+NameTree::setRelationshipSecond(Entry* parent, Entry* child, const Name& name)
+{
+	Name utagName = name.decentUntag(name);
+	std::string uri = utagName.getSubName(utagName.size()-1, 1).toUri();
+
+	std::list<Entry*> decentList = parent->getDecentMap(uri);
+	if (decentList.size() != 0) {
+		Entry *first = decentList.front();
+		decentList.push_back(child);
+		decentList.sort(decentSort);
+		Entry *after = decentList.front();
+		if (first->getName().toUri().compare(after->getName().toUri()) != 0) {
+			if (parent->getIsDecentHead()) {
+				child->setIsDecentHead(true);
+				first->setIsDecentHead(false);
+			}
+		}
+		parent->updateDecentMap(uri, decentList);
+	} else {
+		std::list<Entry*> newDecentList;
+		newDecentList.push_back(child);
+		parent->setDecentMap(uri, newDecentList);
+		if (parent->getIsDecentHead()) {
+			child->setIsDecentHead(true);
+		}
+	}
+
+	if (child->getIsDecentHead()) {
+		if (parent->getIsDecentHead()) {
+			parent->setDecentHead(child);
+			child->getNdnTreeEntry()->setDecentHead(child);
+		} else {
+			child->setIsDecentHead(false);
+		}
+	}
+}
+
 size_t
 NameTree::eraseIfEmpty(Entry* entry, bool canEraseAncestors)
 {
@@ -159,6 +401,18 @@ NameTree::findExactMatch(const Name& name, size_t prefixLen) const
 }
 
 Entry*
+NameTree::findExactMatch(const DecentName& name, size_t prefixLen) const
+{
+  prefixLen = std::min(name.size(), prefixLen);
+  if (prefixLen > getMaxDepth()) {
+    return nullptr;
+  }
+
+  const Node* node = m_ht.find(name, prefixLen);
+  return node == nullptr ? nullptr : &node->entry;
+}
+
+Entry*
 NameTree::findLongestPrefixMatch(const Name& name, const EntrySelector& entrySelector) const
 {
   size_t depth = std::min(name.size(), getMaxDepth());
@@ -167,6 +421,43 @@ NameTree::findLongestPrefixMatch(const Name& name, const EntrySelector& entrySel
   for (ssize_t i = depth; i >= 0; --i) {
     const Node* node = m_ht.find(name, i, hashes);
     if (node != nullptr && entrySelector(node->entry)) {
+      return &node->entry;
+    }
+  }
+
+  return nullptr;
+}
+
+Entry*
+NameTree::findLongestPrefixMatch(const DecentName& name, const EntrySelector& entrySelector) const
+{
+  size_t depth = std::min(name.size(), getMaxDepth());
+  HashSequence hashes = computeHashes(name, depth);
+
+  for (ssize_t i = depth; i >= 0; --i) {
+    const Node* node = m_ht.find(name, i, hashes);
+    if (node != nullptr && entrySelector(node->entry)) {
+      return &node->entry;
+    }
+  }
+
+  return nullptr;
+}
+
+Entry*
+NameTree::findLongestPrefixMatchDecent(const Name& name, const EntrySelector& entrySelector) const
+{
+	const Name utagName = name.decentUntag(name);
+  size_t depth = std::min(utagName.size(), getMaxDepth());
+  HashSequence hashes = computeHashes(utagName, depth);
+
+  for (ssize_t i = depth; i >= 0; --i) {
+    const Node* node = m_ht.find(utagName, i, hashes);
+		if (node != nullptr && node->entry.getDecentHead()) {
+			if (entrySelector(*node->entry.getDecentHead())) {
+				return node->entry.getDecentHead();
+			}
+		} else if (node != nullptr && entrySelector(node->entry)) {
       return &node->entry;
     }
   }
@@ -185,6 +476,36 @@ NameTree::findLongestPrefixMatch(const Entry& entry1, const EntrySelector& entry
     entry = entry->getParent();
   }
   return nullptr;
+}
+
+Entry*
+NameTree::findLongestPrefixMatchDecent(const Entry& entry1, const EntrySelector& entrySelector) const
+{
+	Entry* entry = const_cast<Entry*>(&entry1);
+	Entry* decent = nullptr;
+
+  while (entry != nullptr) {
+		if (entry->getName().isNonPreemptibleName(entry->getName())) {
+			decent = entry;
+			break;
+		}
+		decent = entry->getDecentHead();
+		if (decent != nullptr)
+			break;
+    entry = entry->getParent();
+  }
+
+	if (decent != nullptr) {
+		while (decent != nullptr) {
+			if (entrySelector(*decent)) {
+				return decent;
+			}
+
+			decent = decent->getParent();
+		}
+	}
+
+	return nullptr;
 }
 
 Entry*
@@ -209,6 +530,28 @@ NameTree::findLongestPrefixMatch(const pit::Entry& pitEntry, const EntrySelector
   return this->findLongestPrefixMatch(*nte, entrySelector);
 }
 
+Entry*
+NameTree::findLongestPrefixMatchDecent(const pit::Entry& pitEntry, const EntrySelector& entrySelector) const
+{
+  const Entry* nte = this->getEntry(pitEntry);
+  BOOST_ASSERT(nte != nullptr);
+
+  const Name& name = pitEntry.getName();
+  size_t depth = std::min(name.size(), getMaxDepth());
+  if (nte->getName().size() < pitEntry.getName().size()) {
+    // PIT entry name either exceeds depth limit or ends with an implicit digest: go deeper
+    for (size_t i = nte->getName().size() + 1; i <= depth; ++i) {
+      const Entry* exact = this->findExactMatch(name, i);
+      if (exact == nullptr) {
+        break;
+      }
+      nte = exact;
+    }
+  }
+
+	return this->findLongestPrefixMatchDecent(*nte, entrySelector);
+}
+
 boost::iterator_range<NameTree::const_iterator>
 NameTree::findAllMatches(const Name& name, const EntrySelector& entrySelector) const
 {
@@ -219,6 +562,32 @@ NameTree::findAllMatches(const Name& name, const EntrySelector& entrySelector) c
   // trie from the root node.
 
   Entry* entry = this->findLongestPrefixMatch(name, entrySelector);
+  return {Iterator(make_shared<PrefixMatchImpl>(*this, entrySelector), entry), end()};
+}
+
+boost::iterator_range<NameTree::const_iterator>
+NameTree::findAllMatches(const DecentName& name, const EntrySelector& entrySelector) const
+{
+  // As we are using Name Prefix Hash Table, and the current LPM() is
+  // implemented as starting from full name, and reduce the number of
+  // components by 1 each time, we could use it here.
+  // For trie-like design, it could be more efficient by walking down the
+  // trie from the root node.
+
+  Entry* entry = this->findLongestPrefixMatch(name, entrySelector);
+  return {Iterator(make_shared<PrefixMatchImpl>(*this, entrySelector), entry), end()};
+}
+
+boost::iterator_range<NameTree::const_iterator>
+NameTree::findAllMatchesDecent(const Name& name, const EntrySelector& entrySelector) const
+{
+  // As we are using Name Prefix Hash Table, and the current LPM() is
+  // implemented as starting from full name, and reduce the number of
+  // components by 1 each time, we could use it here.
+  // For trie-like design, it could be more efficient by walking down the
+  // trie from the root node.
+
+	Entry* entry = this->findLongestPrefixMatchDecent(name, entrySelector);
   return {Iterator(make_shared<PrefixMatchImpl>(*this, entrySelector), entry), end()};
 }
 

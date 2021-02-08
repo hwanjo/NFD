@@ -33,8 +33,6 @@
 namespace nfd {
 namespace cs {
 
-NDN_CXX_ASSERT_FORWARD_ITERATOR(Cs::const_iterator);
-
 NFD_LOG_INIT(ContentStore);
 
 static unique_ptr<Policy>
@@ -66,17 +64,17 @@ Cs::insert(const Data& data, bool isUnsolicited)
     }
   }
 
-  iterator it;
+  const_iterator it;
   bool isNewEntry = false;
   std::tie(it, isNewEntry) = m_table.emplace(data.shared_from_this(), isUnsolicited);
-  EntryImpl& entry = const_cast<EntryImpl&>(*it);
+  Entry& entry = const_cast<Entry&>(*it);
 
-  entry.updateStaleTime();
+  entry.updateFreshUntil();
 
   if (!isNewEntry) { // existing entry
     // XXX This doesn't forbid unsolicited Data from refreshing a solicited entry.
     if (entry.isUnsolicited() && !isUnsolicited) {
-      entry.unsetUnsolicited();
+      entry.clearUnsolicited();
     }
 
     m_policy->afterRefresh(it);
@@ -86,118 +84,58 @@ Cs::insert(const Data& data, bool isUnsolicited)
   }
 }
 
-void
-Cs::erase(const Name& prefix, size_t limit, const AfterEraseCallback& cb)
+std::pair<Cs::const_iterator, Cs::const_iterator>
+Cs::findPrefixRange(const Name& prefix) const
 {
-  BOOST_ASSERT(static_cast<bool>(cb));
-
-  iterator first = m_table.lower_bound(prefix);
-  iterator last = m_table.end();
+  auto first = m_table.lower_bound(prefix);
+  auto last = m_table.end();
   if (prefix.size() > 0) {
     last = m_table.lower_bound(prefix.getSuccessor());
   }
+  return {first, last};
+}
+
+size_t
+Cs::eraseImpl(const Name& prefix, size_t limit)
+{
+  const_iterator i, last;
+  std::tie(i, last) = findPrefixRange(prefix);
 
   size_t nErased = 0;
-  while (first != last && nErased < limit) {
-    m_policy->beforeErase(first);
-    first = m_table.erase(first);
+  while (i != last && nErased < limit) {
+    m_policy->beforeErase(i);
+    i = m_table.erase(i);
     ++nErased;
   }
-
-  if (cb) {
-    cb(nErased);
-  }
+  return nErased;
 }
 
-void
-Cs::find(const Interest& interest,
-         const HitCallback& hitCallback,
-         const MissCallback& missCallback) const
+Cs::const_iterator
+Cs::findImpl(const Interest& interest) const
 {
-  BOOST_ASSERT(static_cast<bool>(hitCallback));
-  BOOST_ASSERT(static_cast<bool>(missCallback));
-
   if (!m_shouldServe || m_policy->getLimit() == 0) {
-    missCallback(interest);
-    return;
+    return m_table.end();
   }
+
   const Name& prefix = interest.getName();
-  bool isRightmost = interest.getChildSelector() == 1;
-  NFD_LOG_DEBUG("find " << prefix << (isRightmost ? " R" : " L"));
+  auto range = findPrefixRange(prefix);
+  auto match = std::find_if(range.first, range.second,
+                            [&interest] (const auto& entry) { return entry.canSatisfy(interest); });
 
-  iterator first = m_table.lower_bound(prefix);
-  iterator last = m_table.end();
-  if (prefix.size() > 0) {
-    last = m_table.lower_bound(prefix.getSuccessor());
+  if (match == range.second) {
+    NFD_LOG_DEBUG("find " << prefix << " no-match");
+    return m_table.end();
   }
-
-  iterator match = last;
-  if (isRightmost) {
-    match = this->findRightmost(interest, first, last);
-  }
-  else {
-    match = this->findLeftmost(interest, first, last);
-  }
-
-  if (match == last) {
-    NFD_LOG_DEBUG("  no-match");
-    missCallback(interest);
-    return;
-  }
-  NFD_LOG_DEBUG("  matching " << match->getName());
+  NFD_LOG_DEBUG("find " << prefix << " matching " << match->getName());
   m_policy->beforeUse(match);
-  hitCallback(interest, match->getData());
-}
-
-iterator
-Cs::findLeftmost(const Interest& interest, iterator first, iterator last) const
-{
-  return std::find_if(first, last, [&interest] (const auto& entry) { return entry.canSatisfy(interest); });
-}
-
-iterator
-Cs::findRightmost(const Interest& interest, iterator first, iterator last) const
-{
-  // Each loop visits a sub-namespace under a prefix one component longer than Interest Name.
-  // If there is a match in that sub-namespace, the leftmost match is returned;
-  // otherwise, loop continues.
-
-  size_t interestNameLength = interest.getName().size();
-  for (iterator right = last; right != first;) {
-    iterator prev = std::prev(right);
-
-    // special case: [first,prev] have exact Names
-    if (prev->getName().size() == interestNameLength) {
-      NFD_LOG_TRACE("  find-among-exact " << prev->getName());
-      iterator matchExact = this->findRightmostAmongExact(interest, first, right);
-      return matchExact == right ? last : matchExact;
-    }
-
-    Name prefix = prev->getName().getPrefix(interestNameLength + 1);
-    iterator left = m_table.lower_bound(prefix);
-
-    // normal case: [left,right) are under one-component-longer prefix
-    NFD_LOG_TRACE("  find-under-prefix " << prefix);
-    iterator match = this->findLeftmost(interest, left, right);
-    if (match != right) {
-      return match;
-    }
-    right = left;
-  }
-  return last;
-}
-
-iterator
-Cs::findRightmostAmongExact(const Interest& interest, iterator first, iterator last) const
-{
-  return find_last_if(first, last, [&interest] (const auto& entry) { return entry.canSatisfy(interest); });
+  return match;
 }
 
 void
 Cs::dump()
 {
   NFD_LOG_DEBUG("dump table");
-  for (const EntryImpl& entry : m_table) {
+  for (const Entry& entry : m_table) {
     NFD_LOG_TRACE(entry.getFullName());
   }
 }
@@ -217,9 +155,7 @@ Cs::setPolicyImpl(unique_ptr<Policy> policy)
 {
   NFD_LOG_DEBUG("set-policy " << policy->getName());
   m_policy = std::move(policy);
-  m_beforeEvictConnection = m_policy->beforeEvict.connect([this] (iterator it) {
-      m_table.erase(it);
-    });
+  m_beforeEvictConnection = m_policy->beforeEvict.connect([this] (auto it) { m_table.erase(it); });
 
   m_policy->setCs(this);
   BOOST_ASSERT(m_policy->getCs() == this);

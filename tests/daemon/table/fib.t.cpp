@@ -42,150 +42,110 @@ BOOST_FIXTURE_TEST_SUITE(TestFib, GlobalIoFixture)
 
 BOOST_AUTO_TEST_CASE(FibEntry)
 {
-  Name prefix("ndn:/pxWhfFza");
+  NameTree nameTree;
+  Fib fib(nameTree);
+
+  Name prefix("/pxWhfFza");
   shared_ptr<Face> face1 = make_shared<DummyFace>();
   shared_ptr<Face> face2 = make_shared<DummyFace>();
 
-  Entry entry(prefix);
+  Face* expectedFace = nullptr;
+  uint64_t expectedCost = 0;
+  size_t nNewNextHopSignals = 0;
+
+  fib.afterNewNextHop.connect(
+    [&] (const Name& prefix1, const NextHop& nextHop) {
+      ++nNewNextHopSignals;
+      BOOST_CHECK_EQUAL(prefix1, prefix);
+      BOOST_CHECK_EQUAL(&nextHop.getFace(), expectedFace);
+      BOOST_CHECK_EQUAL(nextHop.getCost(), expectedCost);
+    });
+
+  Entry& entry = *fib.insert(prefix).first;
+
   BOOST_CHECK_EQUAL(entry.getPrefix(), prefix);
 
   // []
   BOOST_CHECK_EQUAL(entry.getNextHops().size(), 0);
 
-  // [(face, cost, endpointId)]
-  entry.addOrUpdateNextHop(*face1, 200, 20);
-  // [(face1,200,20)]
+  expectedFace = face1.get();
+  expectedCost = 20;
+
+  fib.addOrUpdateNextHop(entry, *face1, 20);
+  // [(face1,20)]
   BOOST_CHECK_EQUAL(entry.getNextHops().size(), 1);
   BOOST_CHECK_EQUAL(&entry.getNextHops().begin()->getFace(), face1.get());
-  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getEndpointId(), 200);
   BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getCost(), 20);
+  BOOST_CHECK_EQUAL(nNewNextHopSignals, 1);
 
-  entry.addOrUpdateNextHop(*face1, 300, 30);
-  // [(face1,200,20), (face1,300,30)]
-  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 2);
+  fib.addOrUpdateNextHop(entry, *face1, 30);
+  // [(face1,30)]
+  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 1);
   BOOST_CHECK_EQUAL(&entry.getNextHops().begin()->getFace(), face1.get());
-  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getEndpointId(), 200);
-  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getCost(), 20);
+  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getCost(), 30);
+  BOOST_CHECK_EQUAL(nNewNextHopSignals, 1);
 
-  entry.addOrUpdateNextHop(*face2, 400, 40);
-  // [(face1,200,20), (face1,300,30), (face2,400,40)]
-  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 3);
+  expectedFace = face2.get();
+  expectedCost = 40;
+
+  fib.addOrUpdateNextHop(entry, *face2, 40);
+  // [(face1,30), (face2,40)]
+  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 2);
   {
     NextHopList::const_iterator it = entry.getNextHops().begin();
     BOOST_REQUIRE(it != entry.getNextHops().end());
     BOOST_CHECK_EQUAL(&it->getFace(), face1.get());
-    BOOST_CHECK_EQUAL(it->getEndpointId(), 200);
-    BOOST_CHECK_EQUAL(it->getCost(), 20);
-
-    ++it;
-    BOOST_REQUIRE(it != entry.getNextHops().end());
-    BOOST_CHECK_EQUAL(&it->getFace(), face1.get());
-    BOOST_CHECK_EQUAL(it->getEndpointId(), 300);
     BOOST_CHECK_EQUAL(it->getCost(), 30);
 
     ++it;
     BOOST_REQUIRE(it != entry.getNextHops().end());
     BOOST_CHECK_EQUAL(&it->getFace(), face2.get());
-    BOOST_CHECK_EQUAL(it->getEndpointId(), 400);
     BOOST_CHECK_EQUAL(it->getCost(), 40);
 
     ++it;
     BOOST_CHECK(it == entry.getNextHops().end());
+
+    BOOST_CHECK_EQUAL(nNewNextHopSignals, 2);
   }
 
-  entry.addOrUpdateNextHop(*face2, 100, 10);
-  // [(face2,100,10), (face1,200,20), (face1,300,30), (face2,400,40)]
-  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 4);
+  fib.addOrUpdateNextHop(entry, *face2, 10);
+  // [(face2,10), (face1,30)]
+  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 2);
   {
     NextHopList::const_iterator it = entry.getNextHops().begin();
     BOOST_REQUIRE(it != entry.getNextHops().end());
     BOOST_CHECK_EQUAL(&it->getFace(), face2.get());
-    BOOST_CHECK_EQUAL(it->getEndpointId(), 100);
     BOOST_CHECK_EQUAL(it->getCost(), 10);
 
     ++it;
     BOOST_REQUIRE(it != entry.getNextHops().end());
     BOOST_CHECK_EQUAL(&it->getFace(), face1.get());
-    BOOST_CHECK_EQUAL(it->getEndpointId(), 200);
-    BOOST_CHECK_EQUAL(it->getCost(), 20);
-
-    ++it;
-    BOOST_REQUIRE(it != entry.getNextHops().end());
-    BOOST_CHECK_EQUAL(&it->getFace(), face1.get());
-    BOOST_CHECK_EQUAL(it->getEndpointId(), 300);
     BOOST_CHECK_EQUAL(it->getCost(), 30);
 
     ++it;
-    BOOST_REQUIRE(it != entry.getNextHops().end());
-    BOOST_CHECK_EQUAL(&it->getFace(), face2.get());
-    BOOST_CHECK_EQUAL(it->getEndpointId(), 400);
-    BOOST_CHECK_EQUAL(it->getCost(), 40);
-
-    ++it;
     BOOST_CHECK(it == entry.getNextHops().end());
+
+    BOOST_CHECK_EQUAL(nNewNextHopSignals, 2);
   }
 
-  entry.addOrUpdateNextHop(*face1, 200, 50);
-  // [(face2,100,10), (face1,300,30), (face2,400,40), (face1,200,50)]
-  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 4);
-  {
-    NextHopList::const_iterator it = entry.getNextHops().begin();
-    BOOST_REQUIRE(it != entry.getNextHops().end());
-    BOOST_CHECK_EQUAL(&it->getFace(), face2.get());
-    BOOST_CHECK_EQUAL(it->getEndpointId(), 100);
-    BOOST_CHECK_EQUAL(it->getCost(), 10);
-
-    ++it;
-    BOOST_REQUIRE(it != entry.getNextHops().end());
-    BOOST_CHECK_EQUAL(&it->getFace(), face1.get());
-    BOOST_CHECK_EQUAL(it->getEndpointId(), 300);
-    BOOST_CHECK_EQUAL(it->getCost(), 30);
-
-    ++it;
-    BOOST_REQUIRE(it != entry.getNextHops().end());
-    BOOST_CHECK_EQUAL(&it->getFace(), face2.get());
-    BOOST_CHECK_EQUAL(it->getEndpointId(), 400);
-    BOOST_CHECK_EQUAL(it->getCost(), 40);
-
-    ++it;
-    BOOST_REQUIRE(it != entry.getNextHops().end());
-    BOOST_CHECK_EQUAL(&it->getFace(), face1.get());
-    BOOST_CHECK_EQUAL(it->getEndpointId(), 200);
-    BOOST_CHECK_EQUAL(it->getCost(), 50);
-
-    ++it;
-    BOOST_CHECK(it == entry.getNextHops().end());
-  }
-
-  entry.removeNextHop(*face1, 200);
-  // [(face2,100,10), (face1,300,30), (face2,400,40)]
-  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 3);
-  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getFace().getId(), face2->getId());
-  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getEndpointId(), 100);
-  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getCost(), 10);
-
-  entry.removeNextHop(*face1, 200);
-  // [(face2,100,10), (face1,300,30), (face2,400,40)]
-  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 3);
-  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getFace().getId(), face2->getId());
-  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getEndpointId(), 100);
-  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getCost(), 10);
-
-  entry.removeNextHop(*face2,100);
-  // [(face1,300,30), (face2,400,40)]
-  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 2);
-
-  entry.removeNextHop(*face2,400);
-  // [(face1,300,30)]
+  Fib::RemoveNextHopResult status = fib.removeNextHop(entry, *face1);
+  // [(face2,10)]
+  BOOST_CHECK(status == Fib::RemoveNextHopResult::NEXTHOP_REMOVED);
   BOOST_CHECK_EQUAL(entry.getNextHops().size(), 1);
+  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getFace().getId(), face2->getId());
+  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getCost(), 10);
 
-  entry.removeNextHop(*face1,300);
-  // []
-  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 0);
+  status = fib.removeNextHop(entry, *face1);
+  // [(face2,10)]
+  BOOST_CHECK(status == Fib::RemoveNextHopResult::NO_SUCH_NEXTHOP);
+  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 1);
+  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getFace().getId(), face2->getId());
+  BOOST_CHECK_EQUAL(entry.getNextHops().begin()->getCost(), 10);
 
-  entry.removeNextHop(*face1,300);
+  status = fib.removeNextHop(entry, *face2);
   // []
-  BOOST_CHECK_EQUAL(entry.getNextHops().size(), 0);
+  BOOST_CHECK(status == Fib::RemoveNextHopResult::FIB_ENTRY_REMOVED);
+  BOOST_CHECK(fib.findExactMatch(prefix) == nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(Insert_LongestPrefixMatch)

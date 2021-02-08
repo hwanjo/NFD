@@ -121,22 +121,23 @@ public:
 
 BOOST_AUTO_TEST_CASE(UnsatisfiedInterest)
 {
-  Forwarder forwarder;
+  FaceTable faceTable;
+  Forwarder forwarder(faceTable);
 
   auto face1 = make_shared<DummyFace>();
   auto face2 = make_shared<DummyFace>();
-  forwarder.addFace(face1);
-  forwarder.addFace(face2);
+  faceTable.add(face1);
+  faceTable.add(face2);
 
   Pit& pit = forwarder.getPit();
 
-  shared_ptr<Interest> interest1 = makeInterest("/A/0");
-  shared_ptr<Interest> interest2 = makeInterest("/A/1");
+  auto interest1 = makeInterest("/A/0");
+  auto interest2 = makeInterest("/A/1");
   interest1->setInterestLifetime(90_ms);
   interest2->setInterestLifetime(90_ms);
 
-  face1->receiveInterest(*interest1);
-  face2->receiveInterest(*interest2);
+  face1->receiveInterest(*interest1, 0);
+  face2->receiveInterest(*interest2, 0);
   BOOST_CHECK_EQUAL(pit.size(), 2);
 
   this->advanceClocks(100_ms);
@@ -145,23 +146,24 @@ BOOST_AUTO_TEST_CASE(UnsatisfiedInterest)
 
 BOOST_AUTO_TEST_CASE(SatisfiedInterest)
 {
-  Forwarder forwarder;
+  FaceTable faceTable;
+  Forwarder forwarder(faceTable);
 
   auto face1 = make_shared<DummyFace>();
   auto face2 = make_shared<DummyFace>();
-  forwarder.addFace(face1);
-  forwarder.addFace(face2);
+  faceTable.add(face1);
+  faceTable.add(face2);
 
   Pit& pit = forwarder.getPit();
 
-  shared_ptr<Interest> interest = makeInterest("/A/0");
+  auto interest = makeInterest("/A/0");
   interest->setInterestLifetime(90_ms);
-  shared_ptr<Data> data = makeData("/A/0");
+  auto data = makeData("/A/0");
 
-  face1->receiveInterest(*interest);
+  face1->receiveInterest(*interest, 0);
 
   this->advanceClocks(30_ms);
-  face2->receiveData(*data);
+  face2->receiveData(*data, 0);
 
   this->advanceClocks(1_ms);
   BOOST_CHECK_EQUAL(pit.size(), 0);
@@ -169,21 +171,22 @@ BOOST_AUTO_TEST_CASE(SatisfiedInterest)
 
 BOOST_AUTO_TEST_CASE(CsHit)
 {
-  Forwarder forwarder;
+  FaceTable faceTable;
+  Forwarder forwarder(faceTable);
 
   auto face1 = make_shared<DummyFace>();
   auto face2 = make_shared<DummyFace>();
-  forwarder.addFace(face1);
-  forwarder.addFace(face2);
+  faceTable.add(face1);
+  faceTable.add(face2);
 
   Name strategyA("/strategyA/%FD%01");
   PitExpiryTestStrategy::registerAs(strategyA);
   choose<PitExpiryTestStrategy>(forwarder, "/A", strategyA);
 
-  shared_ptr<Interest> interest = makeInterest("/A/0");
+  auto interest = makeInterest("/A/0");
   interest->setInterestLifetime(90_ms);
 
-  shared_ptr<Data> data = makeData("/A/0");
+  auto data = makeData("/A/0");
   data->setTag(make_shared<lp::IncomingFaceIdTag>(face2->getId()));
 
   Pit& pit = forwarder.getPit();
@@ -192,28 +195,29 @@ BOOST_AUTO_TEST_CASE(CsHit)
   Cs& cs = forwarder.getCs();
   cs.insert(*data);
 
-  face1->receiveInterest(*interest);
+  face1->receiveInterest(*interest, 0);
   this->advanceClocks(1_ms);
   BOOST_CHECK_EQUAL(pit.size(), 1);
 
   this->advanceClocks(190_ms);
   BOOST_CHECK_EQUAL(pit.size(), 0);
 
-  face1->receiveInterest(*interest);
+  face1->receiveInterest(*interest, 0);
   this->advanceClocks(1_ms);
   BOOST_CHECK_EQUAL(pit.size(), 0);
 }
 
 BOOST_AUTO_TEST_CASE(ReceiveNack)
 {
-  Forwarder forwarder;
+  FaceTable faceTable;
+  Forwarder forwarder(faceTable);
 
   auto face1 = make_shared<DummyFace>();
   auto face2 = make_shared<DummyFace>();
   auto face3 = make_shared<DummyFace>();
-  forwarder.addFace(face1);
-  forwarder.addFace(face2);
-  forwarder.addFace(face3);
+  faceTable.add(face1);
+  faceTable.add(face2);
+  faceTable.add(face3);
 
   Name strategyA("/strategyA/%FD%01");
   PitExpiryTestStrategy::registerAs(strategyA);
@@ -221,17 +225,16 @@ BOOST_AUTO_TEST_CASE(ReceiveNack)
 
   Pit& pit = forwarder.getPit();
 
-  shared_ptr<Interest> interest = makeInterest("/A/0", 562);
-  interest->setInterestLifetime(90_ms);
-  lp::Nack nack = makeNack("/A/0", 562, lp::NackReason::CONGESTION);
+  auto interest = makeInterest("/A/0", false, 90_ms, 562);
+  lp::Nack nack = makeNack(*interest, lp::NackReason::CONGESTION);
 
-  face1->receiveInterest(*interest);
+  face1->receiveInterest(*interest, 0);
   auto entry = pit.find(*interest);
-  entry->insertOrUpdateOutRecord(*face2, 0, *interest);
-  entry->insertOrUpdateOutRecord(*face3, 0, *interest);
+  entry->insertOrUpdateOutRecord(*face2, *interest);
+  entry->insertOrUpdateOutRecord(*face3, *interest);
 
   this->advanceClocks(10_ms);
-  face2->receiveNack(nack);
+  face2->receiveNack(nack, 0);
 
   this->advanceClocks(1_ms);
   BOOST_CHECK_EQUAL(pit.size(), 1);
@@ -242,10 +245,11 @@ BOOST_AUTO_TEST_CASE(ReceiveNack)
 
 BOOST_AUTO_TEST_CASE(ResetTimerAfterReceiveInterest)
 {
-  Forwarder forwarder;
+  FaceTable faceTable;
+  Forwarder forwarder(faceTable);
 
   auto face = make_shared<DummyFace>();
-  forwarder.addFace(face);
+  faceTable.add(face);
 
   Name strategyA("/strategyA/%FD%01");
   PitExpiryTestStrategy::registerAs(strategyA);
@@ -253,10 +257,9 @@ BOOST_AUTO_TEST_CASE(ResetTimerAfterReceiveInterest)
 
   Pit& pit = forwarder.getPit();
 
-  shared_ptr<Interest> interest = makeInterest("/A/0");
-  interest->setInterestLifetime(90_ms);
+  auto interest = makeInterest("/A/0", false, 90_ms);
 
-  face->receiveInterest(*interest);
+  face->receiveInterest(*interest, 0);
   BOOST_CHECK_EQUAL(pit.size(), 1);
 
   this->advanceClocks(100_ms);
@@ -268,14 +271,15 @@ BOOST_AUTO_TEST_CASE(ResetTimerAfterReceiveInterest)
 
 BOOST_AUTO_TEST_CASE(ResetTimerBeforeSatisfyInterest)
 {
-  Forwarder forwarder;
+  FaceTable faceTable;
+  Forwarder forwarder(faceTable);
 
   auto face1 = make_shared<DummyFace>();
   auto face2 = make_shared<DummyFace>();
   auto face3 = make_shared<DummyFace>();
-  forwarder.addFace(face1);
-  forwarder.addFace(face2);
-  forwarder.addFace(face3);
+  faceTable.add(face1);
+  faceTable.add(face2);
+  faceTable.add(face3);
 
   Name strategyA("/strategyA/%FD%01");
   Name strategyB("/strategyB/%FD%01");
@@ -285,36 +289,34 @@ BOOST_AUTO_TEST_CASE(ResetTimerBeforeSatisfyInterest)
   auto& sB = choose<PitExpiryTestStrategy>(forwarder, "/A/0", strategyB);
   Pit& pit = forwarder.getPit();
 
-  shared_ptr<Interest> interest1 = makeInterest("/A");
-  shared_ptr<Interest> interest2 = makeInterest("/A/0");
-  interest1->setInterestLifetime(90_ms);
-  interest2->setInterestLifetime(90_ms);
-  shared_ptr<Data> data = makeData("/A/0");
+  auto interest1 = makeInterest("/A", true, 90_ms);
+  auto interest2 = makeInterest("/A/0", false, 90_ms);
+  auto data = makeData("/A/0");
 
-  face1->receiveInterest(*interest1);
-  face2->receiveInterest(*interest2);
+  face1->receiveInterest(*interest1, 0);
+  face2->receiveInterest(*interest2, 0);
   BOOST_CHECK_EQUAL(pit.size(), 2);
 
   // beforeSatisfyInterest: the first Data prolongs PIT expiry timer by 190 ms
   this->advanceClocks(30_ms);
-  face3->receiveData(*data);
+  face3->receiveData(*data, 0);
   this->advanceClocks(189_ms);
   BOOST_CHECK_EQUAL(pit.size(), 2);
   this->advanceClocks(2_ms);
   BOOST_CHECK_EQUAL(pit.size(), 0);
 
-  face1->receiveInterest(*interest1);
-  face2->receiveInterest(*interest2);
+  face1->receiveInterest(*interest1, 0);
+  face2->receiveInterest(*interest2, 0);
 
   // beforeSatisfyInterest: the second Data prolongs PIT expiry timer
   // and the third one sets the timer to now
   this->advanceClocks(30_ms);
-  face3->receiveData(*data);
+  face3->receiveData(*data, 0);
   this->advanceClocks(1_ms);
   BOOST_CHECK_EQUAL(pit.size(), 2);
 
   this->advanceClocks(30_ms);
-  face3->receiveData(*data);
+  face3->receiveData(*data, 0);
   this->advanceClocks(1_ms);
   BOOST_CHECK_EQUAL(pit.size(), 0);
 
@@ -326,12 +328,13 @@ BOOST_AUTO_TEST_CASE(ResetTimerBeforeSatisfyInterest)
 
 BOOST_AUTO_TEST_CASE(ResetTimerAfterReceiveData)
 {
-  Forwarder forwarder;
+  FaceTable faceTable;
+  Forwarder forwarder(faceTable);
 
   auto face1 = make_shared<DummyFace>();
   auto face2 = make_shared<DummyFace>();
-  forwarder.addFace(face1);
-  forwarder.addFace(face2);
+  faceTable.add(face1);
+  faceTable.add(face2);
 
   Name strategyA("/strategyA/%FD%01");
   PitExpiryTestStrategy::registerAs(strategyA);
@@ -339,31 +342,30 @@ BOOST_AUTO_TEST_CASE(ResetTimerAfterReceiveData)
 
   Pit& pit = forwarder.getPit();
 
-  shared_ptr<Interest> interest = makeInterest("/A/0");
-  interest->setInterestLifetime(90_ms);
-  shared_ptr<Data> data = makeData("/A/0");
+  auto interest = makeInterest("/A/0", false, 90_ms);
+  auto data = makeData("/A/0");
 
-  face1->receiveInterest(*interest);
+  face1->receiveInterest(*interest, 0);
 
   // afterReceiveData: the first Data prolongs PIT expiry timer by 290 ms
   this->advanceClocks(30_ms);
-  face2->receiveData(*data);
+  face2->receiveData(*data, 0);
   this->advanceClocks(289_ms);
   BOOST_CHECK_EQUAL(pit.size(), 1);
   this->advanceClocks(2_ms);
   BOOST_CHECK_EQUAL(pit.size(), 0);
 
-  face1->receiveInterest(*interest);
+  face1->receiveInterest(*interest, 0);
 
   // afterReceiveData: the second Data prolongs PIT expiry timer
   // and the third one sets the timer to now
   this->advanceClocks(30_ms);
-  face2->receiveData(*data);
+  face2->receiveData(*data, 0);
   this->advanceClocks(1_ms);
   BOOST_CHECK_EQUAL(pit.size(), 1);
 
   this->advanceClocks(30_ms);
-  face2->receiveData(*data);
+  face2->receiveData(*data, 0);
   this->advanceClocks(1_ms);
   BOOST_CHECK_EQUAL(pit.size(), 0);
 
@@ -373,14 +375,15 @@ BOOST_AUTO_TEST_CASE(ResetTimerAfterReceiveData)
 
 BOOST_AUTO_TEST_CASE(ReceiveNackAfterResetTimer)
 {
-  Forwarder forwarder;
+  FaceTable faceTable;
+  Forwarder forwarder(faceTable);
 
   auto face1 = make_shared<DummyFace>();
   auto face2 = make_shared<DummyFace>();
   auto face3 = make_shared<DummyFace>();
-  forwarder.addFace(face1);
-  forwarder.addFace(face2);
-  forwarder.addFace(face3);
+  faceTable.add(face1);
+  faceTable.add(face2);
+  faceTable.add(face3);
 
   Name strategyA("/strategyA/%FD%01");
   PitExpiryTestStrategy::registerAs(strategyA);
@@ -388,24 +391,23 @@ BOOST_AUTO_TEST_CASE(ReceiveNackAfterResetTimer)
 
   Pit& pit = forwarder.getPit();
 
-  shared_ptr<Interest> interest = makeInterest("/A/0", 562);
-  interest->setInterestLifetime(90_ms);
-  lp::Nack nack = makeNack("/A/0", 562, lp::NackReason::CONGESTION);
+  auto interest = makeInterest("/A/0", false, 90_ms, 562);
+  lp::Nack nack = makeNack(*interest, lp::NackReason::CONGESTION);
 
-  face1->receiveInterest(*interest);
+  face1->receiveInterest(*interest, 0);
   auto entry = pit.find(*interest);
-  entry->insertOrUpdateOutRecord(*face2, 0, *interest);
-  entry->insertOrUpdateOutRecord(*face3, 0, *interest);
+  entry->insertOrUpdateOutRecord(*face2, *interest);
+  entry->insertOrUpdateOutRecord(*face3, *interest);
 
   //pitEntry is not erased after receiving the first Nack
   this->advanceClocks(10_ms);
-  face2->receiveNack(nack);
+  face2->receiveNack(nack, 0);
   this->advanceClocks(1_ms);
   BOOST_CHECK_EQUAL(pit.size(), 1);
 
   //pitEntry is erased after receiving the second Nack
   this->advanceClocks(10_ms);
-  face3->receiveNack(nack);
+  face3->receiveNack(nack, 0);
   this->advanceClocks(1_ms);
   BOOST_CHECK_EQUAL(pit.size(), 0);
 }

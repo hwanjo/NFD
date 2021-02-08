@@ -60,6 +60,44 @@ Entry::unsetParent()
   m_parent = nullptr;
 }
 
+void
+Entry::setDecentHead(Entry *entry)
+{
+  decentHead = entry;
+}
+
+void
+Entry::setNdnTreeEntry(Entry *entry)
+{
+  ndnTreeEntry = entry;
+}
+
+std::list<Entry*>
+Entry::getDecentMap(std::string decentName)
+{
+	std::list<Entry*> decentList;
+	auto iter = m_decentMap.find(decentName);
+	if (iter != m_decentMap.end())
+		decentList = iter->second;
+
+	return decentList;
+}
+
+void
+Entry::setDecentMap(std::string decentName, std::list<Entry*> decentList)
+{
+	m_decentMap.insert(make_pair(decentName, decentList));
+}
+
+void
+Entry::updateDecentMap(std::string decentName, std::list<Entry*> decentList)
+{
+	if (decentList.size() == 0)
+		m_decentMap.erase(decentName);
+	else
+		m_decentMap[decentName] = decentList;
+}
+
 bool
 Entry::hasTableEntries() const
 {

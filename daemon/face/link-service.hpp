@@ -26,14 +26,12 @@
 #ifndef NFD_DAEMON_FACE_LINK_SERVICE_HPP
 #define NFD_DAEMON_FACE_LINK_SERVICE_HPP
 
-#include "face-log.hpp"
+#include "face-common.hpp"
 #include "transport.hpp"
 #include "common/counter.hpp"
 
 namespace nfd {
 namespace face {
-
-class Face;
 
 /** \brief counters provided by LinkService
  *  \note The type name 'LinkServiceCounters' is implementation detail.
@@ -112,35 +110,35 @@ public:
   getCounters() const;
 
 public: // upper interface to be used by forwarding
-  /** \brief send Interest
+  /** \brief Send Interest to \p endpoint
    *  \pre setTransport has been called
    */
   void
-  sendInterest(const Interest& interest);
+  sendInterest(const Interest& interest, const EndpointId& endpoint);
 
-  /** \brief send Data
+  /** \brief Send Data to \p endpoint
    *  \pre setTransport has been called
    */
   void
-  sendData(const Data& data);
+  sendData(const Data& data, const EndpointId& endpoint);
 
-  /** \brief send Nack
+  /** \brief Send Nack to \p endpoint
    *  \pre setTransport has been called
    */
   void
-  sendNack(const ndn::lp::Nack& nack);
+  sendNack(const ndn::lp::Nack& nack, const EndpointId& endpoint);
 
   /** \brief signals on Interest received
    */
-  signal::Signal<LinkService, Interest> afterReceiveInterest;
+  signal::Signal<LinkService, Interest, EndpointId> afterReceiveInterest;
 
   /** \brief signals on Data received
    */
-  signal::Signal<LinkService, Data> afterReceiveData;
+  signal::Signal<LinkService, Data, EndpointId> afterReceiveData;
 
   /** \brief signals on Nack received
    */
-  signal::Signal<LinkService, lp::Nack> afterReceiveNack;
+  signal::Signal<LinkService, lp::Nack, EndpointId> afterReceiveNack;
 
   /** \brief signals on Interest dropped by reliability system for exceeding allowed number of retx
    */
@@ -150,53 +148,53 @@ public: // lower interface to be invoked by Transport
   /** \brief performs LinkService specific operations to receive a lower-layer packet
    */
   void
-  receivePacket(Transport::Packet&& packet);
+  receivePacket(const Block& packet, const EndpointId& endpoint);
 
 protected: // upper interface to be invoked in subclass (receive path termination)
   /** \brief delivers received Interest to forwarding
    */
   void
-  receiveInterest(const Interest& interest);
+  receiveInterest(const Interest& interest, const EndpointId& endpoint);
 
   /** \brief delivers received Data to forwarding
    */
   void
-  receiveData(const Data& data);
+  receiveData(const Data& data, const EndpointId& endpoint);
 
   /** \brief delivers received Nack to forwarding
    */
   void
-  receiveNack(const lp::Nack& nack);
+  receiveNack(const lp::Nack& nack, const EndpointId& endpoint);
 
 protected: // lower interface to be invoked in subclass (send path termination)
-  /** \brief sends a lower-layer packet via Transport
+  /** \brief send a lower-layer packet via Transport to \p endpoint
    */
   void
-  sendPacket(Transport::Packet&& packet);
+  sendPacket(const Block& packet, const EndpointId& endpoint);
 
 protected:
   void
   notifyDroppedInterest(const Interest& packet);
 
 private: // upper interface to be overridden in subclass (send path entrypoint)
-  /** \brief performs LinkService specific operations to send an Interest
+  /** \brief performs LinkService specific operations to send an Interest to \p endpoint
    */
   virtual void
-  doSendInterest(const Interest& interest) = 0;
+  doSendInterest(const Interest& interest, const EndpointId& endpoint) = 0;
 
-  /** \brief performs LinkService specific operations to send a Data
+  /** \brief performs LinkService specific operations to send a Data to \p endpoint
    */
   virtual void
-  doSendData(const Data& data) = 0;
+  doSendData(const Data& data, const EndpointId& endpoint) = 0;
 
-  /** \brief performs LinkService specific operations to send a Nack
+  /** \brief performs LinkService specific operations to send a Nack to \p endpoint
    */
   virtual void
-  doSendNack(const lp::Nack& nack) = 0;
+  doSendNack(const lp::Nack& nack, const EndpointId& endpoint) = 0;
 
 private: // lower interface to be overridden in subclass
   virtual void
-  doReceivePacket(Transport::Packet&& packet) = 0;
+  doReceivePacket(const Block& packet, const EndpointId& endpoint) = 0;
 
 private:
   Face* m_face;
@@ -228,15 +226,15 @@ LinkService::getCounters() const
 }
 
 inline void
-LinkService::receivePacket(Transport::Packet&& packet)
+LinkService::receivePacket(const Block& packet, const EndpointId& endpoint)
 {
-  doReceivePacket(std::move(packet));
+  doReceivePacket(packet, endpoint);
 }
 
 inline void
-LinkService::sendPacket(Transport::Packet&& packet)
+LinkService::sendPacket(const Block& packet, const EndpointId& endpoint)
 {
-  m_transport->send(std::move(packet));
+  m_transport->send(packet, endpoint);
 }
 
 std::ostream&

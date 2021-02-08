@@ -76,6 +76,16 @@ Fib::findLongestPrefixMatch(const measurements::Entry& measurementsEntry) const
   return this->findLongestPrefixMatchImpl(measurementsEntry);
 }
 
+const Entry&
+Fib::findLongestPrefixMatchDecent(const pit::Entry& pitEntry) const
+{
+	name_tree::Entry* nte = m_nameTree.findLongestPrefixMatchDecent(pitEntry, &nteHasFibEntry);
+	if (nte != nullptr) {
+		return *nte->getFibEntry();
+	}
+	return *s_emptyEntry;
+}
+
 Entry*
 Fib::findExactMatch(const Name& prefix)
 {
@@ -98,6 +108,27 @@ Fib::insert(const Name& prefix)
   nte.setFibEntry(make_unique<Entry>(prefix));
   ++m_nItems;
   return {nte.getFibEntry(), true};
+}
+
+std::pair<Entry*, bool>
+Fib::insertDecent(const Name& prefix)
+{
+	if (!prefix.isDecentName(prefix))
+		return {nullptr, false};
+
+  name_tree::Entry *nte = m_nameTree.lookupAndInsertDecent(prefix, prefix.size());
+  Entry* entry = nte->getFibEntry();
+  if (entry != nullptr) {
+    return {entry, false};
+  }
+
+  nte->setFibEntry(make_unique<Entry>(prefix));
+  ++m_nItems;
+	if (nte->getNdnTreeEntry() != nullptr) {
+		nte->getNdnTreeEntry()->setFibEntry(make_unique<Entry>(prefix));
+		++m_nItems;
+	}
+  return {nte->getFibEntry(), true};
 }
 
 void
@@ -133,26 +164,32 @@ Fib::erase(const Entry& entry)
 }
 
 void
-Fib::eraseIfEmpty(Entry& entry)
+Fib::addOrUpdateNextHop(Entry& entry, Face& face, uint64_t cost)
 {
-  if (!entry.hasNextHops()) {
+  NextHopList::iterator it;
+  bool isNew;
+  std::tie(it, isNew) = entry.addOrUpdateNextHop(face, cost);
+
+  if (isNew)
+    this->afterNewNextHop(entry.getPrefix(), *it);
+}
+
+Fib::RemoveNextHopResult
+Fib::removeNextHop(Entry& entry, const Face& face)
+{
+  bool isRemoved = entry.removeNextHop(face);
+
+  if (!isRemoved) {
+    return RemoveNextHopResult::NO_SUCH_NEXTHOP;
+  }
+  else if (!entry.hasNextHops()) {
     name_tree::Entry* nte = m_nameTree.getEntry(entry);
     this->erase(nte, false);
+    return RemoveNextHopResult::FIB_ENTRY_REMOVED;
   }
-}
-
-void
-Fib::removeNextHop(Entry& entry, const Face& face, EndpointId endpointId)
-{
-  entry.removeNextHop(face, endpointId);
-  this->eraseIfEmpty(entry);
-}
-
-void
-Fib::removeNextHopByFace(Entry& entry, const Face& face)
-{
-  entry.removeNextHopByFace(face);
-  this->eraseIfEmpty(entry);
+  else {
+    return RemoveNextHopResult::NEXTHOP_REMOVED;
+  }
 }
 
 Fib::Range

@@ -25,6 +25,7 @@
 
 #include "generic-link-service.hpp"
 
+#include <ndn-cxx/lp/pit-token.hpp>
 #include <ndn-cxx/lp/tags.hpp>
 
 #include <cmath>
@@ -38,8 +39,6 @@ constexpr size_t CONGESTION_MARK_SIZE = tlv::sizeOfVarNumber(lp::tlv::Congestion
                                         tlv::sizeOfVarNumber(sizeof(uint64_t)) +        // length
                                         tlv::sizeOfNonNegativeInteger(UINT64_MAX);      // value
 
-constexpr uint32_t DEFAULT_CONGESTION_THRESHOLD_DIVISOR = 2;
-
 GenericLinkService::GenericLinkService(const GenericLinkService::Options& options)
   : m_options(options)
   , m_fragmenter(m_options.fragmenterOptions, this)
@@ -47,7 +46,6 @@ GenericLinkService::GenericLinkService(const GenericLinkService::Options& option
   , m_reliability(m_options.reliabilityOptions, this)
   , m_lastSeqNo(-2)
   , m_nextMarkTime(time::steady_clock::TimePoint::max())
-  , m_lastMarkTime(time::steady_clock::TimePoint::min())
   , m_nMarkedSinceInMarkingState(0)
 {
   m_reassembler.beforeTimeout.connect([this] (auto...) { ++this->nReassemblyTimeouts; });
@@ -65,15 +63,15 @@ GenericLinkService::setOptions(const GenericLinkService::Options& options)
 }
 
 void
-GenericLinkService::requestIdlePacket()
+GenericLinkService::requestIdlePacket(const EndpointId& endpointId)
 {
   // No need to request Acks to attach to this packet from LpReliability, as they are already
   // attached in sendLpPacket
-  this->sendLpPacket({});
+  this->sendLpPacket({}, endpointId);
 }
 
 void
-GenericLinkService::sendLpPacket(lp::Packet&& pkt)
+GenericLinkService::sendLpPacket(lp::Packet&& pkt, const EndpointId& endpointId)
 {
   const ssize_t mtu = this->getTransport()->getMtu();
 
@@ -85,76 +83,81 @@ GenericLinkService::sendLpPacket(lp::Packet&& pkt)
     checkCongestionLevel(pkt);
   }
 
-  Transport::Packet tp(pkt.wireEncode());
-  if (mtu != MTU_UNLIMITED && tp.packet.size() > static_cast<size_t>(mtu)) {
+  auto block = pkt.wireEncode();
+  if (mtu != MTU_UNLIMITED && block.size() > static_cast<size_t>(mtu)) {
     ++this->nOutOverMtu;
     NFD_LOG_FACE_WARN("attempted to send packet over MTU limit");
     return;
   }
-  this->sendPacket(std::move(tp));
+  this->sendPacket(block, endpointId);
 }
 
 void
-GenericLinkService::doSendInterest(const Interest& interest)
+GenericLinkService::doSendInterest(const Interest& interest, const EndpointId& endpointId)
 {
   lp::Packet lpPacket(interest.wireEncode());
 
   encodeLpFields(interest, lpPacket);
 
-  this->sendNetPacket(std::move(lpPacket), true);
+  this->sendNetPacket(std::move(lpPacket), endpointId, true);
 }
 
 void
-GenericLinkService::doSendData(const Data& data)
+GenericLinkService::doSendData(const Data& data, const EndpointId& endpointId)
 {
   lp::Packet lpPacket(data.wireEncode());
 
   encodeLpFields(data, lpPacket);
 
-  this->sendNetPacket(std::move(lpPacket), false);
+  this->sendNetPacket(std::move(lpPacket), endpointId, false);
 }
 
 void
-GenericLinkService::doSendNack(const lp::Nack& nack)
+GenericLinkService::doSendNack(const lp::Nack& nack, const EndpointId& endpointId)
 {
   lp::Packet lpPacket(nack.getInterest().wireEncode());
   lpPacket.add<lp::NackField>(nack.getHeader());
 
   encodeLpFields(nack, lpPacket);
 
-  this->sendNetPacket(std::move(lpPacket), false);
+  this->sendNetPacket(std::move(lpPacket), endpointId, false);
 }
 
 void
 GenericLinkService::encodeLpFields(const ndn::PacketBase& netPkt, lp::Packet& lpPacket)
 {
   if (m_options.allowLocalFields) {
-    shared_ptr<lp::IncomingFaceIdTag> incomingFaceIdTag = netPkt.getTag<lp::IncomingFaceIdTag>();
+    auto incomingFaceIdTag = netPkt.getTag<lp::IncomingFaceIdTag>();
     if (incomingFaceIdTag != nullptr) {
       lpPacket.add<lp::IncomingFaceIdField>(*incomingFaceIdTag);
     }
   }
 
-  shared_ptr<lp::CongestionMarkTag> congestionMarkTag = netPkt.getTag<lp::CongestionMarkTag>();
+  auto congestionMarkTag = netPkt.getTag<lp::CongestionMarkTag>();
   if (congestionMarkTag != nullptr) {
     lpPacket.add<lp::CongestionMarkField>(*congestionMarkTag);
   }
 
   if (m_options.allowSelfLearning) {
-    shared_ptr<lp::NonDiscoveryTag> nonDiscoveryTag = netPkt.getTag<lp::NonDiscoveryTag>();
+    auto nonDiscoveryTag = netPkt.getTag<lp::NonDiscoveryTag>();
     if (nonDiscoveryTag != nullptr) {
       lpPacket.add<lp::NonDiscoveryField>(*nonDiscoveryTag);
     }
 
-    shared_ptr<lp::PrefixAnnouncementTag> prefixAnnouncementTag = netPkt.getTag<lp::PrefixAnnouncementTag>();
+    auto prefixAnnouncementTag = netPkt.getTag<lp::PrefixAnnouncementTag>();
     if (prefixAnnouncementTag != nullptr) {
       lpPacket.add<lp::PrefixAnnouncementField>(*prefixAnnouncementTag);
     }
   }
+
+  auto pitToken = netPkt.getTag<lp::PitToken>();
+  if (pitToken != nullptr) {
+    lpPacket.add<lp::PitTokenField>(*pitToken);
+  }
 }
 
 void
-GenericLinkService::sendNetPacket(lp::Packet&& pkt, bool isInterest)
+GenericLinkService::sendNetPacket(lp::Packet&& pkt, const EndpointId& endpointId, bool isInterest)
 {
   std::vector<lp::Packet> frags;
   ssize_t mtu = this->getTransport()->getMtu();
@@ -206,7 +209,7 @@ GenericLinkService::sendNetPacket(lp::Packet&& pkt, bool isInterest)
   }
 
   for (lp::Packet& frag : frags) {
-    this->sendLpPacket(std::move(frag));
+    this->sendLpPacket(std::move(frag), endpointId);
   }
 }
 
@@ -226,34 +229,26 @@ void
 GenericLinkService::checkCongestionLevel(lp::Packet& pkt)
 {
   ssize_t sendQueueLength = getTransport()->getSendQueueLength();
-  // This operation requires that the transport supports retrieving current send queue length
+  // The transport must support retrieving the current send queue length
   if (sendQueueLength < 0) {
     return;
   }
 
-  // To avoid overflowing the queue, set the congestion threshold to at least half of the send
-  // queue capacity.
-  size_t congestionThreshold = m_options.defaultCongestionThreshold;
-  if (getTransport()->getSendQueueCapacity() >= 0) {
-    congestionThreshold = std::min(congestionThreshold,
-                                   static_cast<size_t>(getTransport()->getSendQueueCapacity()) /
-                                                       DEFAULT_CONGESTION_THRESHOLD_DIVISOR);
-  }
-
   if (sendQueueLength > 0) {
-    NFD_LOG_FACE_TRACE("txqlen=" << sendQueueLength << " threshold=" << congestionThreshold <<
-                       " capacity=" << getTransport()->getSendQueueCapacity());
+    NFD_LOG_FACE_TRACE("txqlen=" << sendQueueLength << " threshold=" <<
+                       m_options.defaultCongestionThreshold << " capacity=" <<
+                       getTransport()->getSendQueueCapacity());
   }
 
-  if (static_cast<size_t>(sendQueueLength) > congestionThreshold) { // Send queue is congested
+  // sendQueue is above target
+  if (static_cast<size_t>(sendQueueLength) > m_options.defaultCongestionThreshold) {
     const auto now = time::steady_clock::now();
-    if (now >= m_nextMarkTime || now >= m_lastMarkTime + m_options.baseCongestionMarkingInterval) {
-      // Mark at most one initial packet per baseCongestionMarkingInterval
-      if (m_nMarkedSinceInMarkingState == 0) {
-        m_nextMarkTime = now;
-      }
 
-      // Time to mark packet
+    if (m_nextMarkTime == time::steady_clock::TimePoint::max()) {
+      m_nextMarkTime = now + m_options.baseCongestionMarkingInterval;
+    }
+    // Mark packet if sendQueue stays above target for one interval
+    else if (now >= m_nextMarkTime) {
       pkt.set<lp::CongestionMarkField>(1);
       ++nCongestionMarked;
       NFD_LOG_FACE_DEBUG("LpPacket was marked as congested");
@@ -261,10 +256,10 @@ GenericLinkService::checkCongestionLevel(lp::Packet& pkt)
       ++m_nMarkedSinceInMarkingState;
       // Decrease the marking interval by the inverse of the square root of the number of packets
       // marked in this incident of congestion
-      m_nextMarkTime += time::nanoseconds(static_cast<time::nanoseconds::rep>(
-                                            m_options.baseCongestionMarkingInterval.count() /
-                                            std::sqrt(m_nMarkedSinceInMarkingState)));
-      m_lastMarkTime = now;
+      time::nanoseconds interval(static_cast<time::nanoseconds::rep>(
+                                   m_options.baseCongestionMarkingInterval.count() /
+                                   std::sqrt(m_nMarkedSinceInMarkingState + 1)));
+      m_nextMarkTime += interval;
     }
   }
   else if (m_nextMarkTime != time::steady_clock::TimePoint::max()) {
@@ -276,10 +271,10 @@ GenericLinkService::checkCongestionLevel(lp::Packet& pkt)
 }
 
 void
-GenericLinkService::doReceivePacket(Transport::Packet&& packet)
+GenericLinkService::doReceivePacket(const Block& packet, const EndpointId& endpoint)
 {
   try {
-    lp::Packet pkt(packet.packet);
+    lp::Packet pkt(packet);
 
     if (m_options.reliabilityOptions.isEnabled) {
       m_reliability.processIncomingPacket(pkt);
@@ -299,10 +294,9 @@ GenericLinkService::doReceivePacket(Transport::Packet&& packet)
     bool isReassembled = false;
     Block netPkt;
     lp::Packet firstPkt;
-    std::tie(isReassembled, netPkt, firstPkt) = m_reassembler.receiveFragment(packet.remoteEndpoint,
-                                                                              pkt);
+    std::tie(isReassembled, netPkt, firstPkt) = m_reassembler.receiveFragment(endpoint, pkt);
     if (isReassembled) {
-      this->decodeNetPacket(netPkt, firstPkt);
+      this->decodeNetPacket(netPkt, firstPkt, endpoint);
     }
   }
   catch (const tlv::Error& e) {
@@ -312,20 +306,21 @@ GenericLinkService::doReceivePacket(Transport::Packet&& packet)
 }
 
 void
-GenericLinkService::decodeNetPacket(const Block& netPkt, const lp::Packet& firstPkt)
+GenericLinkService::decodeNetPacket(const Block& netPkt, const lp::Packet& firstPkt,
+                                    const EndpointId& endpointId)
 {
   try {
     switch (netPkt.type()) {
       case tlv::Interest:
         if (firstPkt.has<lp::NackField>()) {
-          this->decodeNack(netPkt, firstPkt);
+          this->decodeNack(netPkt, firstPkt, endpointId);
         }
         else {
-          this->decodeInterest(netPkt, firstPkt);
+          this->decodeInterest(netPkt, firstPkt, endpointId);
         }
         break;
       case tlv::Data:
-        this->decodeData(netPkt, firstPkt);
+        this->decodeData(netPkt, firstPkt, endpointId);
         break;
       default:
         ++this->nInNetInvalid;
@@ -340,7 +335,8 @@ GenericLinkService::decodeNetPacket(const Block& netPkt, const lp::Packet& first
 }
 
 void
-GenericLinkService::decodeInterest(const Block& netPkt, const lp::Packet& firstPkt)
+GenericLinkService::decodeInterest(const Block& netPkt, const lp::Packet& firstPkt,
+                                   const EndpointId& endpointId)
 {
   BOOST_ASSERT(netPkt.type() == tlv::Interest);
   BOOST_ASSERT(!firstPkt.has<lp::NackField>());
@@ -387,11 +383,16 @@ GenericLinkService::decodeInterest(const Block& netPkt, const lp::Packet& firstP
     return;
   }
 
-  this->receiveInterest(*interest);
+  if (firstPkt.has<lp::PitTokenField>()) {
+    interest->setTag(make_shared<lp::PitToken>(firstPkt.get<lp::PitTokenField>()));
+  }
+
+  this->receiveInterest(*interest, endpointId);
 }
 
 void
-GenericLinkService::decodeData(const Block& netPkt, const lp::Packet& firstPkt)
+GenericLinkService::decodeData(const Block& netPkt, const lp::Packet& firstPkt,
+                               const EndpointId& endpointId)
 {
   BOOST_ASSERT(netPkt.type() == tlv::Data);
 
@@ -440,11 +441,12 @@ GenericLinkService::decodeData(const Block& netPkt, const lp::Packet& firstPkt)
     }
   }
 
-  this->receiveData(*data);
+  this->receiveData(*data, endpointId);
 }
 
 void
-GenericLinkService::decodeNack(const Block& netPkt, const lp::Packet& firstPkt)
+GenericLinkService::decodeNack(const Block& netPkt, const lp::Packet& firstPkt,
+                               const EndpointId& endpointId)
 {
   BOOST_ASSERT(netPkt.type() == tlv::Interest);
   BOOST_ASSERT(firstPkt.has<lp::NackField>());
@@ -484,7 +486,7 @@ GenericLinkService::decodeNack(const Block& netPkt, const lp::Packet& firstPkt)
     return;
   }
 
-  this->receiveNack(nack);
+  this->receiveNack(nack, endpointId);
 }
 
 } // namespace face

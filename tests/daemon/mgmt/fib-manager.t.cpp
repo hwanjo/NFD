@@ -40,7 +40,6 @@ class FibManagerFixture : public ManagerFixtureWithAuthenticator
 public:
   FibManagerFixture()
     : m_fib(m_forwarder.getFib())
-    , m_faceTable(m_forwarder.getFaceTable())
     , m_manager(m_fib, m_faceTable, m_dispatcher, *m_authenticator)
   {
     setTopPrefix();
@@ -126,7 +125,6 @@ public: // for check
 
 protected:
   Fib&       m_fib;
-  FaceTable& m_faceTable;
   FibManager m_manager;
 };
 
@@ -144,8 +142,7 @@ operator<<(std::ostream& os, FibManagerFixture::CheckNextHopResult result)
     return os << "NO_NEXTHOP";
   case FibManagerFixture::CheckNextHopResult::WRONG_COST:
     return os << "WRONG_COST";
-  };
-
+  }
   return os << static_cast<int>(result);
 }
 
@@ -301,9 +298,9 @@ BOOST_AUTO_TEST_CASE(Basic)
   BOOST_REQUIRE_NE(face3, face::INVALID_FACEID);
 
   fib::Entry* entry = m_fib.insert("/hello").first;
-  entry->addOrUpdateNextHop(*m_faceTable.get(face1), 0, 101);
-  entry->addOrUpdateNextHop(*m_faceTable.get(face2), 0, 202);
-  entry->addOrUpdateNextHop(*m_faceTable.get(face3), 0, 303);
+  m_fib.addOrUpdateNextHop(*entry, *m_faceTable.get(face1), 101);
+  m_fib.addOrUpdateNextHop(*entry, *m_faceTable.get(face2), 202);
+  m_fib.addOrUpdateNextHop(*entry, *m_faceTable.get(face3), 303);
 
   testRemoveNextHop(makeParameters("/hello", face1));
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1);
@@ -354,8 +351,8 @@ BOOST_AUTO_TEST_CASE(ImplicitFaceId)
   };
 
   fib::Entry* entry = m_fib.insert("/hello").first;
-  entry->addOrUpdateNextHop(*m_faceTable.get(face1), 0, 101);
-  entry->addOrUpdateNextHop(*m_faceTable.get(face2), 0, 202);
+  m_fib.addOrUpdateNextHop(*entry, *m_faceTable.get(face1), 101);
+  m_fib.addOrUpdateNextHop(*entry, *m_faceTable.get(face2), 202);
 
   testWithImplicitFaceId(ControlParameters().setName("/hello").setFaceId(0), face1);
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1);
@@ -385,7 +382,8 @@ BOOST_AUTO_TEST_CASE(RecordNotExist)
     receiveInterest(req);
   };
 
-  m_fib.insert("/hello").first->addOrUpdateNextHop(*m_faceTable.get(face1), 0, 101);
+  fib::Entry* entry = m_fib.insert("/hello").first;
+  m_fib.addOrUpdateNextHop(*entry, *m_faceTable.get(face1), 101);
 
   testRemoveNextHop(makeParameters("/hello", face2 + 100));
   BOOST_REQUIRE_EQUAL(m_responses.size(), 1); // face does not exist
@@ -410,8 +408,8 @@ BOOST_AUTO_TEST_CASE(FibDataset)
     Name prefix = Name("test").appendSegment(i);
     actualPrefixes.insert(prefix);
     fib::Entry* fibEntry = m_fib.insert(prefix).first;
-    fibEntry->addOrUpdateNextHop(*m_faceTable.get(addFace()), 0, std::numeric_limits<uint8_t>::max() - 1);
-    fibEntry->addOrUpdateNextHop(*m_faceTable.get(addFace()), 0, std::numeric_limits<uint8_t>::max() - 2);
+    m_fib.addOrUpdateNextHop(*fibEntry, *m_faceTable.get(addFace()), std::numeric_limits<uint8_t>::max() - 1);
+    m_fib.addOrUpdateNextHop(*fibEntry, *m_faceTable.get(addFace()), std::numeric_limits<uint8_t>::max() - 2);
   }
 
   receiveInterest(Interest("/localhost/nfd/fib/list").setCanBePrefix(true));

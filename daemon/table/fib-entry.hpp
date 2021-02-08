@@ -36,6 +36,8 @@ class Entry;
 
 namespace fib {
 
+class Fib;
+
 /** \class nfd::fib::NextHopList
  *  \brief Represents a collection of nexthops.
  *
@@ -74,36 +76,35 @@ public:
     return !m_nextHops.empty();
   }
 
-  /** \return whether there is a NextHop record for \p face with the given \p endpointId
+  /** \return whether there is a NextHop record for \p face
    */
   bool
-  hasNextHop(const Face& face, EndpointId endpointId) const;
-
-  /** \brief adds a NextHop record
-   *
-   *  If a NextHop record for \p face and \p endpointId already exists,
-   *  its cost is updated.
-   */
-  void
-  addOrUpdateNextHop(Face& face, EndpointId endpointId, uint64_t cost);
-
-  /** \brief removes the NextHop record for \p face with the given \p endpointId
-   */
-  void
-  removeNextHop(const Face& face, EndpointId endpointId);
-
-  /** \brief removes all NextHop records on \p face for any \p endpointId
-   */
-  void
-  removeNextHopByFace(const Face& face);
+  hasNextHop(const Face& face) const;
 
 private:
+  /** \brief adds a NextHop record to the entry
+   *
+   *  If a NextHop record for \p face already exists in the entry, its cost is set to \p cost.
+   *
+   *  \return the iterator to the new or updated NextHop and a bool indicating whether a new
+   *  NextHop was inserted
+   */
+  std::pair<NextHopList::iterator, bool>
+  addOrUpdateNextHop(Face& face, uint64_t cost);
+
+  /** \brief removes a NextHop record
+   *
+   *  If no NextHop record for face exists, do nothing.
+   */
+  bool
+  removeNextHop(const Face& face);
+
   /** \note This method is non-const because mutable iterators are needed by callers.
    */
   NextHopList::iterator
-  findNextHop(const Face& face, EndpointId endpointId);
+  findNextHop(const Face& face);
 
-  /** \brief sorts the nexthop list by cost
+  /** \brief sorts the nexthop list
    */
   void
   sortNextHops();
@@ -115,6 +116,7 @@ private:
   name_tree::Entry* m_nameTreeEntry = nullptr;
 
   friend class name_tree::Entry;
+  friend class Fib;
 };
 
 } // namespace fib

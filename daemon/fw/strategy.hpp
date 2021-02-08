@@ -241,10 +241,7 @@ protected: // actions
    */
   VIRTUAL_WITH_TESTS void
   sendInterest(const shared_ptr<pit::Entry>& pitEntry,
-               const FaceEndpoint& egress, const Interest& interest)
-  {
-    m_forwarder.onOutgoingInterest(pitEntry, egress, interest);
-  }
+               const FaceEndpoint& egress, const Interest& interest);
 
   /** \brief send \p data to \p egress
    *  \param pitEntry PIT entry
@@ -316,6 +313,9 @@ protected: // accessors
   const fib::Entry&
   lookupFib(const pit::Entry& pitEntry) const;
 
+  const fib::Entry&
+  lookupDecentFib(const pit::Entry& pitEntry) const;
+
   MeasurementsAccessor&
   getMeasurements()
   {
@@ -325,13 +325,13 @@ protected: // accessors
   Face*
   getFace(FaceId id) const
   {
-    return m_forwarder.getFace(id);
+    return getFaceTable().get(id);
   }
 
   const FaceTable&
   getFaceTable() const
   {
-    return m_forwarder.getFaceTable();
+    return m_forwarder.m_faceTable;
   }
 
 protected: // instance name
@@ -382,8 +382,8 @@ private: // registry
   find(const Name& instanceName);
 
 protected: // accessors
-  signal::Signal<FaceTable, Face&>& afterAddFace;
-  signal::Signal<FaceTable, Face&>& beforeRemoveFace;
+  signal::Signal<FaceTable, Face>& afterAddFace;
+  signal::Signal<FaceTable, Face>& beforeRemoveFace;
 
 private: // instance fields
   Name m_name;

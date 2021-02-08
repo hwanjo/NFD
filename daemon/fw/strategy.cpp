@@ -27,6 +27,8 @@
 #include "forwarder.hpp"
 #include "common/logger.hpp"
 
+#include <ndn-cxx/lp/pit-token.hpp>
+
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/copy.hpp>
 
@@ -139,8 +141,8 @@ Strategy::makeInstanceName(const Name& input, const Name& strategyName)
 }
 
 Strategy::Strategy(Forwarder& forwarder)
-  : afterAddFace(forwarder.getFaceTable().afterAdd)
-  , beforeRemoveFace(forwarder.getFaceTable().beforeRemove)
+  : afterAddFace(forwarder.m_faceTable.afterAdd)
+  , beforeRemoveFace(forwarder.m_faceTable.beforeRemove)
   , m_forwarder(forwarder)
   , m_measurements(m_forwarder.getMeasurements(), m_forwarder.getStrategyChoice(), *this)
 {
@@ -192,15 +194,40 @@ Strategy::onDroppedInterest(const FaceEndpoint& egress, const Interest& interest
 }
 
 void
+Strategy::sendInterest(const shared_ptr<pit::Entry>& pitEntry,
+                       const FaceEndpoint& egress, const Interest& interest)
+{
+  if (interest.getTag<lp::PitToken>() != nullptr) {
+    Interest interest2 = interest; // make a copy to preserve tag on original packet
+    interest2.removeTag<lp::PitToken>();
+    m_forwarder.onOutgoingInterest(pitEntry, egress, interest2);
+    return;
+  }
+  m_forwarder.onOutgoingInterest(pitEntry, egress, interest);
+}
+
+void
 Strategy::sendData(const shared_ptr<pit::Entry>& pitEntry, const Data& data,
                    const FaceEndpoint& egress)
 {
   BOOST_ASSERT(pitEntry->getInterest().matchesData(data));
 
+  shared_ptr<lp::PitToken> pitToken;
+  auto inRecord = pitEntry->getInRecord(egress.face);
+  if (inRecord != pitEntry->in_end()) {
+    pitToken = inRecord->getInterest().getTag<lp::PitToken>();
+  }
+
   // delete the PIT entry's in-record based on egress,
   // since Data is sent to face and endpoint from which the Interest was received
-  pitEntry->deleteInRecord(egress.face, egress.endpoint);
+  pitEntry->deleteInRecord(egress.face);
 
+  if (pitToken != nullptr) {
+    Data data2 = data; // make a copy so each downstream can get a different PIT token
+    data2.setTag(pitToken);
+    m_forwarder.onOutgoingData(data2, egress);
+    return;
+  }
   m_forwarder.onOutgoingData(data, egress);
 }
 
@@ -208,23 +235,32 @@ void
 Strategy::sendDataToAll(const shared_ptr<pit::Entry>& pitEntry,
                         const FaceEndpoint& ingress, const Data& data)
 {
-  std::set<std::pair<Face*, EndpointId>> pendingDownstreams;
+  std::set<Face*> pendingDownstreams;
   auto now = time::steady_clock::now();
 
   // remember pending downstreams
   for (const pit::InRecord& inRecord : pitEntry->getInRecords()) {
     if (inRecord.getExpiry() > now) {
       if (inRecord.getFace().getId() == ingress.face.getId() &&
-          inRecord.getEndpointId() == ingress.endpoint &&
           inRecord.getFace().getLinkType() != ndn::nfd::LINK_TYPE_AD_HOC) {
         continue;
       }
-      pendingDownstreams.emplace(&inRecord.getFace(), inRecord.getEndpointId());
+      pendingDownstreams.emplace(&inRecord.getFace());
     }
   }
 
-  for (const auto& pendingDownstream : pendingDownstreams) {
-    this->sendData(pitEntry, data, FaceEndpoint(*pendingDownstream.first, pendingDownstream.second));
+	if (!pitEntry->getDecentName().empty() && data.getDecentName().empty()) {
+    Data decentData = data;
+    DecentName decentName(pitEntry->getDecentName().toUri());
+    decentData.setDecentName(decentName);
+
+    for (const auto& pendingDownstream : pendingDownstreams) {
+      this->sendData(pitEntry, decentData, FaceEndpoint(*pendingDownstream, 0));
+    }
+  } else {
+    for (const auto& pendingDownstream : pendingDownstreams) {
+      this->sendData(pitEntry, data, FaceEndpoint(*pendingDownstream, 0));
+    }
   }
 }
 
@@ -233,20 +269,20 @@ Strategy::sendNacks(const shared_ptr<pit::Entry>& pitEntry, const lp::NackHeader
                     std::initializer_list<FaceEndpoint> exceptFaceEndpoints)
 {
   // populate downstreams with all downstreams faces
-  std::set<std::pair<Face*, EndpointId>> downstreams;
+  std::set<Face*> downstreams;
   std::transform(pitEntry->in_begin(), pitEntry->in_end(), std::inserter(downstreams, downstreams.end()),
                  [] (const pit::InRecord& inR) {
-                  return std::make_pair(&inR.getFace(), inR.getEndpointId());
+                  return &inR.getFace();
                  });
 
   // delete excluded faces
   for (const auto& exceptFaceEndpoint : exceptFaceEndpoints) {
-    downstreams.erase({&exceptFaceEndpoint.face, exceptFaceEndpoint.endpoint});
+    downstreams.erase(&exceptFaceEndpoint.face);
   }
 
   // send Nacks
   for (const auto& downstream : downstreams) {
-    this->sendNack(pitEntry, FaceEndpoint(*downstream.first, downstream.second), header);
+    this->sendNack(pitEntry, FaceEndpoint(*downstream, 0), header);
   }
   // warning: don't loop on pitEntry->getInRecords(), because in-record is deleted when sending Nack
 }
@@ -261,6 +297,44 @@ Strategy::lookupFib(const pit::Entry& pitEntry) const
   if (interest.getForwardingHint().empty()) {
     // FIB lookup with Interest name
     const fib::Entry& fibEntry = fib.findLongestPrefixMatch(pitEntry);
+    NFD_LOG_TRACE("lookupFib noForwardingHint found=" << fibEntry.getPrefix());
+    return fibEntry;
+  }
+
+  const DelegationList& fh = interest.getForwardingHint();
+  // Forwarding hint should have been stripped by incoming Interest pipeline when reaching producer region
+  BOOST_ASSERT(!m_forwarder.getNetworkRegionTable().isInProducerRegion(fh));
+
+  const fib::Entry* fibEntry = nullptr;
+  for (const Delegation& del : fh) {
+    fibEntry = &fib.findLongestPrefixMatch(del.name);
+    if (fibEntry->hasNextHops()) {
+      if (fibEntry->getPrefix().size() == 0) {
+        // in consumer region, return the default route
+        NFD_LOG_TRACE("lookupFib inConsumerRegion found=" << fibEntry->getPrefix());
+      }
+      else {
+        // in default-free zone, use the first delegation that finds a FIB entry
+        NFD_LOG_TRACE("lookupFib delegation=" << del.name << " found=" << fibEntry->getPrefix());
+      }
+      return *fibEntry;
+    }
+    BOOST_ASSERT(fibEntry->getPrefix().size() == 0); // only ndn:/ FIB entry can have zero nexthop
+  }
+  BOOST_ASSERT(fibEntry != nullptr && fibEntry->getPrefix().size() == 0);
+  return *fibEntry; // only occurs if no delegation finds a FIB nexthop
+}
+
+const fib::Entry&
+Strategy::lookupDecentFib(const pit::Entry& pitEntry) const
+{
+  const Fib& fib = m_forwarder.getFib();
+
+  const Interest& interest = pitEntry.getInterest();
+  // has forwarding hint?
+  if (interest.getForwardingHint().empty()) {
+    // FIB lookup with Interest name
+    const fib::Entry& fibEntry = fib.findLongestPrefixMatchDecent(pitEntry);
     NFD_LOG_TRACE("lookupFib noForwardingHint found=" << fibEntry.getPrefix());
     return fibEntry;
   }

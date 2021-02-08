@@ -36,7 +36,8 @@ NFD_REGISTER_STRATEGY(AccessStrategy);
 
 AccessStrategy::AccessStrategy(Forwarder& forwarder, const Name& name)
   : Strategy(forwarder)
-  , m_removeFaceInfoConn(beforeRemoveFace.connect([this] (const Face& face) { removeFaceInfo(face); }))
+  , m_rttEstimatorOpts(make_shared<RttEstimator::Options>()) // use the default options
+  , m_removeFaceConn(beforeRemoveFace.connect([this] (const Face& face) { m_fit.erase(face.getId()); }))
 {
   ParsedInstanceName parsed = parseInstanceName(name);
   if (!parsed.parameters.empty()) {
@@ -129,7 +130,7 @@ AccessStrategy::sendToLastNexthop(const FaceEndpoint& ingress, const Interest& i
   }
 
   Face* outFace = this->getFace(mi.lastNexthop);
-  if (outFace == nullptr || !fibEntry.hasNextHop(*outFace, 0)) {
+  if (outFace == nullptr || !fibEntry.hasNextHop(*outFace)) {
     NFD_LOG_DEBUG(pitEntry->getInterest() << " last-nexthop-gone");
     return false;
   }
@@ -139,7 +140,7 @@ AccessStrategy::sendToLastNexthop(const FaceEndpoint& ingress, const Interest& i
     return false;
   }
 
-  auto rto = mi.rtt.computeRto();
+  auto rto = mi.rtt.getEstimatedRto();
   NFD_LOG_DEBUG(pitEntry->getInterest() << " interestTo " << mi.lastNexthop
                 << " last-nexthop rto=" << time::duration_cast<time::microseconds>(rto).count());
 
@@ -147,10 +148,11 @@ AccessStrategy::sendToLastNexthop(const FaceEndpoint& ingress, const Interest& i
 
   // schedule RTO timeout
   PitInfo* pi = pitEntry->insertStrategyInfo<PitInfo>().first;
-  pi->rtoTimer = getScheduler().schedule(rto, [=] {
-    afterRtoTimeout(weak_ptr<pit::Entry>(pitEntry),
-                    ingress.face.getId(), ingress.endpoint, mi.lastNexthop);
-  });
+  pi->rtoTimer = getScheduler().schedule(rto,
+    [this, pitWeak = weak_ptr<pit::Entry>(pitEntry), face = ingress.face.getId(),
+     endpoint = ingress.endpoint, lastNexthop = mi.lastNexthop] {
+      afterRtoTimeout(pitWeak, face, endpoint, lastNexthop);
+    });
 
   return true;
 }
@@ -170,7 +172,7 @@ AccessStrategy::afterRtoTimeout(const weak_ptr<pit::Entry>& pitWeak,
     return;
   }
 
-  auto inRecord = pitEntry->getInRecord(*inFace, inEndpointId);
+  auto inRecord = pitEntry->getInRecord(*inFace);
   // in-record is erased only if Interest is satisfied, and RTO timer should have been cancelled
   // note: if this strategy is extended to send Nacks, that would also erase the in-record,
   //       and the RTO timer should be cancelled in that case as well
@@ -217,7 +219,7 @@ AccessStrategy::beforeSatisfyInterest(const shared_ptr<pit::Entry>& pitEntry,
     return;
   }
 
-  auto outRecord = pitEntry->getOutRecord(ingress.face, 0);
+  auto outRecord = pitEntry->getOutRecord(ingress.face);
   if (outRecord == pitEntry->out_end()) { // no out-record
     NFD_LOG_DEBUG(pitEntry->getInterest() << " dataFrom " << ingress << " no-out-record");
     return;
@@ -226,15 +228,16 @@ AccessStrategy::beforeSatisfyInterest(const shared_ptr<pit::Entry>& pitEntry,
   auto rtt = time::steady_clock::now() - outRecord->getLastRenewed();
   NFD_LOG_DEBUG(pitEntry->getInterest() << " dataFrom " << ingress
                 << " rtt=" << time::duration_cast<time::microseconds>(rtt).count());
-  this->updateMeasurements(ingress.face, data, time::duration_cast<RttEstimator::Duration>(rtt));
+  this->updateMeasurements(ingress.face, data, rtt);
 }
 
 void
-AccessStrategy::updateMeasurements(const Face& inFace, const Data& data,
-                                   const RttEstimator::Duration& rtt)
+AccessStrategy::updateMeasurements(const Face& inFace, const Data& data, time::nanoseconds rtt)
 {
-  ///\todo move FaceInfoTable out of AccessStrategy instance, to Measurements or somewhere else
-  FaceInfo& fi = m_fit[inFace.getId()];
+  auto ret = m_fit.emplace(std::piecewise_construct,
+                           std::forward_as_tuple(inFace.getId()),
+                           std::forward_as_tuple(m_rttEstimatorOpts));
+  FaceInfo& fi = ret.first->second;
   fi.rtt.addMeasurement(rtt);
 
   MtInfo* mi = this->addPrefixMeasurements(data);
@@ -276,14 +279,7 @@ AccessStrategy::addPrefixMeasurements(const Data& data)
   }
 
   this->getMeasurements().extendLifetime(*me, 8_s);
-
-  return me->insertStrategyInfo<MtInfo>().first;
-}
-
-void
-AccessStrategy::removeFaceInfo(const Face& face)
-{
-  m_fit.erase(face.getId());
+  return me->insertStrategyInfo<MtInfo>(m_rttEstimatorOpts).first;
 }
 
 } // namespace fw

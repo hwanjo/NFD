@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/**
- * Copyright (c) 2014-2016,  Regents of the University of California,
+/*
+ * Copyright (c) 2014-2019,  Regents of the University of California,
  *                           Arizona Board of Regents,
  *                           Colorado State University,
  *                           University Pierre & Marie Curie, Sorbonne University,
@@ -26,8 +26,7 @@
 #ifndef NFD_DAEMON_TABLE_CS_POLICY_HPP
 #define NFD_DAEMON_TABLE_CS_POLICY_HPP
 
-#include "cs-internal.hpp"
-#include "cs-entry-impl.hpp"
+#include "cs-entry.hpp"
 
 namespace nfd {
 namespace cs {
@@ -67,23 +66,34 @@ public:
   ~Policy() = default;
 
   const std::string&
-  getName() const;
+  getName() const
+  {
+    return m_policyName;
+  }
 
-public:
   /** \brief gets cs
    */
   Cs*
-  getCs() const;
+  getCs() const
+  {
+    return m_cs;
+  }
 
   /** \brief sets cs
    */
   void
-  setCs(Cs *cs);
+  setCs(Cs* cs)
+  {
+    m_cs = cs;
+  }
 
   /** \brief gets hard limit (in number of entries)
    */
   size_t
-  getLimit() const;
+  getLimit() const
+  {
+    return m_limit;
+  }
 
   /** \brief sets hard limit (in number of entries)
    *  \post getLimit() == nMaxEntries
@@ -94,12 +104,18 @@ public:
   void
   setLimit(size_t nMaxEntries);
 
+public:
+  /** \brief a reference to an CS entry
+   *  \note operator< of EntryRef compares the Data name enclosed in the Entry.
+   */
+  using EntryRef = Table::const_iterator;
+
   /** \brief emits when an entry is being evicted
    *
-   *  A policy implementation should emit this signal to cause CS to erase the entry from its index.
+   *  A policy implementation should emit this signal to cause CS to erase an entry from its index.
    *  CS should connect to this signal and erase the entry upon signal emission.
    */
-  signal::Signal<Policy, iterator> beforeEvict;
+  signal::Signal<Policy, EntryRef> beforeEvict;
 
   /** \brief invoked by CS after a new entry is inserted
    *  \post cs.size() <= getLimit()
@@ -108,27 +124,27 @@ public:
    *  During this process, \p i might be evicted.
    */
   void
-  afterInsert(iterator i);
+  afterInsert(EntryRef i);
 
   /** \brief invoked by CS after an existing entry is refreshed by same Data
    *
    *  The policy may witness this refresh to make better eviction decisions in the future.
    */
   void
-  afterRefresh(iterator i);
+  afterRefresh(EntryRef i);
 
   /** \brief invoked by CS before an entry is erased due to management command
    *  \warning CS must not invoke this method if an entry is erased due to eviction.
    */
   void
-  beforeErase(iterator i);
+  beforeErase(EntryRef i);
 
   /** \brief invoked by CS before an entry is used to match a lookup
    *
    *  The policy may witness this usage to make better eviction decisions in the future.
    */
   void
-  beforeUse(iterator i);
+  beforeUse(EntryRef i);
 
 protected:
   /** \brief invoked after a new entry is created in CS
@@ -140,7 +156,7 @@ protected:
    *  in order to keep CS size under limit.
    */
   virtual void
-  doAfterInsert(iterator i) = 0;
+  doAfterInsert(EntryRef i) = 0;
 
   /** \brief invoked after an existing entry is refreshed by same Data
    *
@@ -148,7 +164,7 @@ protected:
    *  and adjust its cleanup index.
    */
   virtual void
-  doAfterRefresh(iterator i) = 0;
+  doAfterRefresh(EntryRef i) = 0;
 
   /** \brief invoked before an entry is erased due to management command
    *  \note This will not be invoked for an entry being evicted by policy.
@@ -157,7 +173,7 @@ protected:
    *  from its cleanup index without emitted \p afterErase signal.
    */
   virtual void
-  doBeforeErase(iterator i) = 0;
+  doBeforeErase(EntryRef i) = 0;
 
   /** \brief invoked before an entry is used to match a lookup
    *
@@ -165,7 +181,7 @@ protected:
    *  and adjust its cleanup index.
    */
   virtual void
-  doBeforeUse(iterator i) = 0;
+  doBeforeUse(EntryRef i) = 0;
 
   /** \brief evicts zero or more entries
    *  \post CS size does not exceed hard limit
@@ -177,8 +193,8 @@ protected:
   DECLARE_SIGNAL_EMIT(beforeEvict)
 
 private: // registry
-  typedef std::function<unique_ptr<Policy>()> CreateFunc;
-  typedef std::map<std::string, CreateFunc> Registry; // indexed by policy name
+  using CreateFunc = std::function<unique_ptr<Policy>()>;
+  using Registry = std::map<std::string, CreateFunc>; // indexed by policy name
 
   static Registry&
   getRegistry();
@@ -188,30 +204,6 @@ private:
   size_t m_limit;
   Cs* m_cs;
 };
-
-inline const std::string&
-Policy::getName() const
-{
-  return m_policyName;
-}
-
-inline Cs*
-Policy::getCs() const
-{
-  return m_cs;
-}
-
-inline void
-Policy::setCs(Cs *cs)
-{
-  m_cs = cs;
-}
-
-inline size_t
-Policy::getLimit() const
-{
-  return m_limit;
-}
 
 } // namespace cs
 } // namespace nfd

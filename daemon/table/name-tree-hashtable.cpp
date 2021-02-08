@@ -69,8 +69,41 @@ computeHash(const Name& name, size_t prefixLen)
   return h;
 }
 
+HashValue
+computeHash(const DecentName& name, size_t prefixLen)
+{
+  name.wireEncode(); // ensure wire buffer exists
+
+  HashValue h = 0;
+  for (size_t i = 0, last = std::min(prefixLen, name.size()); i < last; ++i) {
+    const name::Component& comp = name[i];
+    h ^= HashFunc::compute(comp.wire(), comp.size());
+  }
+  return h;
+}
+
 HashSequence
 computeHashes(const Name& name, size_t prefixLen)
+{
+  name.wireEncode(); // ensure wire buffer exists
+
+  size_t last = std::min(prefixLen, name.size());
+  HashSequence seq;
+  seq.reserve(last + 1);
+
+  HashValue h = 0;
+  seq.push_back(h);
+
+  for (size_t i = 0; i < last; ++i) {
+    const name::Component& comp = name[i];
+    h ^= HashFunc::compute(comp.wire(), comp.size());
+    seq.push_back(h);
+  }
+  return seq;
+}
+
+HashSequence
+computeHashes(const DecentName& name, size_t prefixLen)
 {
   name.wireEncode(); // ensure wire buffer exists
 
@@ -206,8 +239,44 @@ Hashtable::findOrInsert(const Name& name, size_t prefixLen, HashValue h, bool al
   return {node, true};
 }
 
+std::pair<const Node*, bool>
+Hashtable::findOrInsert(const DecentName& name, size_t prefixLen, HashValue h, bool allowInsert)
+{
+  size_t bucket = this->computeBucketIndex(h);
+
+  for (const Node* node = m_buckets[bucket]; node != nullptr; node = node->next) {
+    if (node->hash == h && name.compare(0, prefixLen, node->entry.getName()) == 0) {
+      NFD_LOG_TRACE("found " << name.getPrefix(prefixLen) << " hash=" << h << " bucket=" << bucket);
+      return {node, false};
+    }
+  }
+
+  if (!allowInsert) {
+    NFD_LOG_TRACE("not-found " << name.getPrefix(prefixLen) << " hash=" << h << " bucket=" << bucket);
+    return {nullptr, false};
+  }
+
+  Node* node = new Node(h, name.getNamePrefix(prefixLen));
+  this->attach(bucket, node);
+  NFD_LOG_TRACE("insert " << node->entry.getName() << " hash=" << h << " bucket=" << bucket);
+  ++m_size;
+
+  if (m_size > m_expandThreshold) {
+    this->resize(static_cast<size_t>(m_options.expandFactor * this->getNBuckets()));
+  }
+
+  return {node, true};
+}
+
 const Node*
 Hashtable::find(const Name& name, size_t prefixLen) const
+{
+  HashValue h = computeHash(name, prefixLen);
+  return const_cast<Hashtable*>(this)->findOrInsert(name, prefixLen, h, false).first;
+}
+
+const Node*
+Hashtable::find(const DecentName& name, size_t prefixLen) const
 {
   HashValue h = computeHash(name, prefixLen);
   return const_cast<Hashtable*>(this)->findOrInsert(name, prefixLen, h, false).first;
@@ -220,11 +289,60 @@ Hashtable::find(const Name& name, size_t prefixLen, const HashSequence& hashes) 
   return const_cast<Hashtable*>(this)->findOrInsert(name, prefixLen, hashes[prefixLen], false).first;
 }
 
+const Node*
+Hashtable::find(const DecentName& name, size_t prefixLen, const HashSequence& hashes) const
+{
+  BOOST_ASSERT(hashes.at(prefixLen) == computeHash(name, prefixLen));
+  return const_cast<Hashtable*>(this)->findOrInsert(name, prefixLen, hashes[prefixLen], false).first;
+}
+
 std::pair<const Node*, bool>
 Hashtable::insert(const Name& name, size_t prefixLen, const HashSequence& hashes)
 {
   BOOST_ASSERT(hashes.at(prefixLen) == computeHash(name, prefixLen));
   return this->findOrInsert(name, prefixLen, hashes[prefixLen], true);
+}
+
+const Node*
+Hashtable::insert(const Name& name, size_t prefixLen) const
+{
+  HashValue h = computeHash(name, prefixLen);
+  return const_cast<Hashtable*>(this)->findOrInsert(name, prefixLen, h, true).first;
+}
+
+const Node*
+Hashtable::insert(const DecentName& name, size_t prefixLen) const
+{
+  HashValue h = computeHash(name, prefixLen);
+  return const_cast<Hashtable*>(this)->findOrInsert(name, prefixLen, h, true).first;
+}
+
+const Node*
+Hashtable::lookupHashTable(const Name& name, size_t prefixLen, const HashValue h) const
+{
+	size_t bucket = this->computeBucketIndex(h);
+
+	for (const Node* node = m_buckets[bucket]; node != nullptr; node = node->next) {
+		if (node->hash == h && name.compare(0, prefixLen, node->entry.getName()) == 0) {
+			return node;
+		}
+	}
+
+	return nullptr;
+}
+
+const Node*
+Hashtable::lookupHashTable(const DecentName& name, size_t prefixLen, const HashValue h) const
+{
+	size_t bucket = this->computeBucketIndex(h);
+
+	for (const Node* node = m_buckets[bucket]; node != nullptr; node = node->next) {
+		if (node->hash == h && name.compare(0, prefixLen, node->entry.getName()) == 0) {
+			return node;
+		}
+	}
+
+	return nullptr;
 }
 
 void

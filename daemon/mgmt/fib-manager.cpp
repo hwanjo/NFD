@@ -22,7 +22,7 @@
  * You should have received a copy of the GNU General Public License along with
  * NFD, e.g., in COPYING.md file.  If not, see <http://www.gnu.org/licenses/>.
  */
-
+#include <iostream>
 #include "fib-manager.hpp"
 
 #include "common/logger.hpp"
@@ -76,10 +76,19 @@ FibManager::addNextHop(const Name& topPrefix, const Interest& interest,
     return done(ControlResponse(410, "Face not found"));
   }
 
-  fib::Entry* entry = m_fib.insert(prefix).first;
-  entry->addOrUpdateNextHop(*face, 0, cost);
+	fib::Entry* entry = nullptr;
+	if (prefix.isDecentName(prefix)) {
+		entry = m_fib.insertDecent(prefix).first;
+		if (entry == nullptr)
+			return done(ControlResponse(410, "FIB entry not found"));
+	} else {
+		entry = m_fib.insert(prefix).first;
+	}
+
+	m_fib.addOrUpdateNextHop(*entry, *face, cost);
 
   NFD_LOG_TRACE("fib/add-nexthop(" << prefix << ',' << faceId << ',' << cost << "): OK");
+	std::cout << "[" << ndn::time::GetTimeMillis() << "] fib/add-nexthop(" << prefix << ',' << faceId << ',' << cost << "): OK" << std::endl;
   return done(ControlResponse(200, "Success").setBody(parameters.wireEncode()));
 }
 
@@ -106,13 +115,17 @@ FibManager::removeNextHop(const Name& topPrefix, const Interest& interest,
     return;
   }
 
-  entry->removeNextHop(*face, 0);
-  if (!entry->hasNextHops()) {
-    m_fib.erase(*entry);
-    NFD_LOG_TRACE("fib/remove-nexthop(" << prefix << ',' << faceId << "): OK entry-erased");
-  }
-  else {
-    NFD_LOG_TRACE("fib/remove-nexthop(" << prefix << ',' << faceId << "): OK nexthop-removed");
+  auto status = m_fib.removeNextHop(*entry, *face);
+  switch (status) {
+    case Fib::RemoveNextHopResult::NO_SUCH_NEXTHOP:
+      NFD_LOG_TRACE("fib/remove-nexthop(" << prefix << ',' << faceId << "): OK no-nexthop");
+      break;
+    case Fib::RemoveNextHopResult::FIB_ENTRY_REMOVED:
+      NFD_LOG_TRACE("fib/remove-nexthop(" << prefix << ',' << faceId << "): OK entry-erased");
+      break;
+    case Fib::RemoveNextHopResult::NEXTHOP_REMOVED:
+      NFD_LOG_TRACE("fib/remove-nexthop(" << prefix << ',' << faceId << "): OK nexthop-removed");
+      break;
   }
 }
 

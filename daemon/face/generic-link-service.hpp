@@ -134,11 +134,15 @@ public:
 
     /** \brief starting value for congestion marking interval
      *
+     *  Packets are marked if the queue size stays above THRESHOLD for at least one INTERVAL.
+     *
      *  The default value (100 ms) is taken from RFC 8289 (CoDel).
      */
     time::nanoseconds baseCongestionMarkingInterval = 100_ms;
 
     /** \brief default congestion threshold in bytes
+     *
+     *  Packets are marked if the queue size stays above THRESHOLD for at least one INTERVAL.
      *
      *  The default value (64 KiB) works well for a queue capacity of 200 KiB.
      */
@@ -173,28 +177,27 @@ PROTECTED_WITH_TESTS_ELSE_PRIVATE: // send path
   /** \brief request an IDLE packet to transmit pending service fields
    */
   void
-  requestIdlePacket();
+  requestIdlePacket(const EndpointId& endpointId);
 
-  /** \brief send an LpPacket fragment
-   *  \param pkt LpPacket to send
+  /** \brief send an LpPacket to \p endpointId
    */
   void
-  sendLpPacket(lp::Packet&& pkt);
+  sendLpPacket(lp::Packet&& pkt, const EndpointId& endpointId);
 
   /** \brief send Interest
    */
   void
-  doSendInterest(const Interest& interest) OVERRIDE_WITH_TESTS_ELSE_FINAL;
+  doSendInterest(const Interest& interest, const EndpointId& endpointId) OVERRIDE_WITH_TESTS_ELSE_FINAL;
 
   /** \brief send Data
    */
   void
-  doSendData(const Data& data) OVERRIDE_WITH_TESTS_ELSE_FINAL;
+  doSendData(const Data& data, const EndpointId& endpointId) OVERRIDE_WITH_TESTS_ELSE_FINAL;
 
   /** \brief send Nack
    */
   void
-  doSendNack(const ndn::lp::Nack& nack) OVERRIDE_WITH_TESTS_ELSE_FINAL;
+  doSendNack(const ndn::lp::Nack& nack, const EndpointId& endpointId) OVERRIDE_WITH_TESTS_ELSE_FINAL;
 
 private: // send path
   /** \brief encode link protocol fields from tags onto an outgoing LpPacket
@@ -206,10 +209,11 @@ private: // send path
 
   /** \brief send a complete network layer packet
    *  \param pkt LpPacket containing a complete network layer packet
+   *  \param endpointId destination endpoint to which LpPacket will be sent
    *  \param isInterest whether the network layer packet is an Interest
    */
   void
-  sendNetPacket(lp::Packet&& pkt, bool isInterest);
+  sendNetPacket(lp::Packet&& pkt, const EndpointId& endpointId, bool isInterest);
 
   /** \brief assign a sequence number to an LpPacket
    */
@@ -232,21 +236,23 @@ private: // receive path
   /** \brief receive Packet from Transport
    */
   void
-  doReceivePacket(Transport::Packet&& packet) OVERRIDE_WITH_TESTS_ELSE_FINAL;
+  doReceivePacket(const Block& packet, const EndpointId& endpoint) OVERRIDE_WITH_TESTS_ELSE_FINAL;
 
   /** \brief decode incoming network-layer packet
    *  \param netPkt reassembled network-layer packet
    *  \param firstPkt LpPacket of first fragment
+   *  \param endpointId endpoint of peer who sent the packet
    *
    *  If decoding is successful, a receive signal is emitted;
    *  otherwise, a warning is logged.
    */
   void
-  decodeNetPacket(const Block& netPkt, const lp::Packet& firstPkt);
+  decodeNetPacket(const Block& netPkt, const lp::Packet& firstPkt, const EndpointId& endpointId);
 
   /** \brief decode incoming Interest
    *  \param netPkt reassembled network-layer packet; TLV-TYPE must be Interest
    *  \param firstPkt LpPacket of first fragment; must not have Nack field
+   *  \param endpointId endpoint of peer who sent the Interest
    *
    *  If decoding is successful, receiveInterest signal is emitted;
    *  otherwise, a warning is logged.
@@ -254,11 +260,12 @@ private: // receive path
    *  \throw tlv::Error parse error in an LpHeader field
    */
   void
-  decodeInterest(const Block& netPkt, const lp::Packet& firstPkt);
+  decodeInterest(const Block& netPkt, const lp::Packet& firstPkt, const EndpointId& endpointId);
 
   /** \brief decode incoming Interest
    *  \param netPkt reassembled network-layer packet; TLV-TYPE must be Data
    *  \param firstPkt LpPacket of first fragment
+   *  \param endpointId endpoint of peer who sent the Data
    *
    *  If decoding is successful, receiveData signal is emitted;
    *  otherwise, a warning is logged.
@@ -266,11 +273,12 @@ private: // receive path
    *  \throw tlv::Error parse error in an LpHeader field
    */
   void
-  decodeData(const Block& netPkt, const lp::Packet& firstPkt);
+  decodeData(const Block& netPkt, const lp::Packet& firstPkt, const EndpointId& endpointId);
 
   /** \brief decode incoming Interest
    *  \param netPkt reassembled network-layer packet; TLV-TYPE must be Interest
    *  \param firstPkt LpPacket of first fragment; must have Nack field
+   *  \param endpointId endpoint of peer who sent the Nack
    *
    *  If decoding is successful, receiveNack signal is emitted;
    *  otherwise, a warning is logged.
@@ -278,7 +286,7 @@ private: // receive path
    *  \throw tlv::Error parse error in an LpHeader field
    */
   void
-  decodeNack(const Block& netPkt, const lp::Packet& firstPkt);
+  decodeNack(const Block& netPkt, const lp::Packet& firstPkt, const EndpointId& endpointId);
 
 PROTECTED_WITH_TESTS_ELSE_PRIVATE:
   Options m_options;
@@ -290,8 +298,6 @@ PROTECTED_WITH_TESTS_ELSE_PRIVATE:
 PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   /// Time to mark next packet due to send queue congestion
   time::steady_clock::TimePoint m_nextMarkTime;
-  /// Time last packet was marked
-  time::steady_clock::TimePoint m_lastMarkTime;
   /// number of marked packets in the current incident of congestion
   size_t m_nMarkedSinceInMarkingState;
 

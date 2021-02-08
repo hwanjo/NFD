@@ -239,9 +239,10 @@ BOOST_AUTO_TEST_CASE(TableEntries)
   BOOST_CHECK_EQUAL(npe.hasTableEntries(), false);
   BOOST_CHECK_EQUAL(npe.isEmpty(), true);
 
-  auto pit1 = make_shared<pit::Entry>(*makeInterest(name));
-  shared_ptr<Interest> interest2 = makeInterest(name);
-  interest2->setMinSuffixComponents(2);
+  auto interest1 = makeInterest(name);
+  auto pit1 = make_shared<pit::Entry>(*interest1);
+  auto interest2 = makeInterest(name);
+  interest2->setMustBeFresh(true);
   auto pit2 = make_shared<pit::Entry>(*interest2);
 
   npe.insertPitEntry(pit1);
@@ -259,7 +260,7 @@ BOOST_AUTO_TEST_CASE(TableEntries)
   BOOST_CHECK_EQUAL(pit1weak.use_count(), 1); // npe is the sole owner of pit1
   npe.erasePitEntry(pit1ptr);
   BOOST_REQUIRE_EQUAL(npe.getPitEntries().size(), 1);
-  BOOST_CHECK_EQUAL(npe.getPitEntries().front()->getInterest(), *interest2);
+  BOOST_CHECK(&npe.getPitEntries().front()->getInterest() == interest2.get());
 
   npe.erasePitEntry(pit2.get());
   BOOST_CHECK_EQUAL(npe.hasPitEntries(), false);

@@ -35,6 +35,7 @@
 #include "fw/multicast-strategy.hpp"
 #include "fw/ncc-strategy.hpp"
 #include "fw/self-learning-strategy.hpp"
+#include "fw/random-strategy.hpp"
 
 #include "tests/test-common.hpp"
 #include <boost/mpl/vector.hpp>
@@ -80,7 +81,8 @@ using Tests = boost::mpl::vector<
   Test<BestRouteStrategy2, false, 5>,
   Test<MulticastStrategy, false, 3>,
   Test<NccStrategy, false, 1>,
-  Test<SelfLearningStrategy, false, 1>
+  Test<SelfLearningStrategy, false, 1>,
+  Test<RandomStrategy, false, 1>
 >;
 
 BOOST_AUTO_TEST_CASE_TEMPLATE(Registration, T, Tests)
@@ -94,7 +96,8 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(InstanceName, T, Tests)
   uint64_t maxVersion = T::Strategy::getStrategyName().at(-1).toVersion();
   BOOST_REQUIRE_LE(T::getMinVersion(), maxVersion);
 
-  Forwarder forwarder;
+  FaceTable faceTable;
+  Forwarder forwarder(faceTable);
   for (uint64_t version = T::getMinVersion(); version <= maxVersion; ++version) {
     Name versionedName = T::getVersionedStrategyName(version);
     unique_ptr<typename T::Strategy> instance;

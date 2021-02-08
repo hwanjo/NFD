@@ -73,7 +73,7 @@ TopologyLink::setDelay(time::nanoseconds delay)
 void
 TopologyLink::addFace(TopologyNode i, shared_ptr<Face> face)
 {
-  auto receiveCb = [this, i] (Block&& pkt) { transmit(i, std::move(pkt)); };
+  auto receiveCb = [this, i] (const Block& packet) { transmit(i, packet); };
 
   auto ret = m_transports.emplace(std::piecewise_construct,
                                   std::forward_as_tuple(i),
@@ -85,7 +85,7 @@ TopologyLink::addFace(TopologyNode i, shared_ptr<Face> face)
 }
 
 void
-TopologyLink::transmit(TopologyNode i, Block&& packet)
+TopologyLink::transmit(TopologyNode i, const Block& packet)
 {
   if (!m_isUp) {
     return;
@@ -98,21 +98,20 @@ TopologyLink::transmit(TopologyNode i, Block&& packet)
       continue;
     }
 
-    this->scheduleReceive(p.second.transport, Block{packet});
+    getScheduler().schedule(m_delay, [packet, recipient = p.second.transport] {
+      recipient->receivePacket(packet);
+    });
   }
 }
 
-void
-TopologyLink::scheduleReceive(face::InternalTransportBase* recipient, Block&& packet)
+TopologySingleLink::TopologySingleLink(shared_ptr<Face> forwarderFace)
+  : m_face(std::move(forwarderFace))
+  , m_forwarderTransport(static_cast<InternalForwarderTransport*>(m_face->getTransport()))
 {
-  getScheduler().schedule(m_delay, [=, pkt = std::move(packet)] () mutable {
-    recipient->receivePacket(std::move(pkt));
-  });
 }
 
 TopologyAppLink::TopologyAppLink(shared_ptr<Face> forwarderFace)
-  : m_face(std::move(forwarderFace))
-  , m_forwarderTransport(static_cast<InternalForwarderTransport*>(m_face->getTransport()))
+  : TopologySingleLink(std::move(forwarderFace))
   , m_clientTransport(make_shared<InternalClientTransport>())
   , m_client(make_shared<ndn::Face>(m_clientTransport, getGlobalIoService()))
 {
@@ -131,6 +130,38 @@ TopologyAppLink::recover()
   m_clientTransport->connectToForwarder(m_forwarderTransport);
 }
 
+class TopologyBareLink::Observer : public face::InternalTransportBase
+{
+public:
+  explicit
+  Observer(std::vector<Block>& receivedPackets)
+    : m_receivedPackets(receivedPackets)
+  {
+  }
+
+  void
+  receivePacket(const Block& packet) final
+  {
+    m_receivedPackets.push_back(packet);
+  }
+
+private:
+  std::vector<Block>& m_receivedPackets;
+};
+
+TopologyBareLink::TopologyBareLink(shared_ptr<Face> forwarderFace)
+  : TopologySingleLink(std::move(forwarderFace))
+  , m_observer(make_unique<Observer>(sentPackets))
+{
+  m_forwarderTransport->setPeer(m_observer.get());
+}
+
+void
+TopologyBareLink::receivePacket(const Block& packet)
+{
+  m_forwarderTransport->receivePacket(packet);
+}
+
 class TopologyPcapLinkService : public GenericLinkService
                               , public TopologyPcap
 {
@@ -138,27 +169,27 @@ private:
   ///\todo #3941 call GenericLinkServiceCounters constructor in TopologyPcapLinkService constructor
 
   void
-  doSendInterest(const Interest& interest) override
+  doSendInterest(const Interest& interest, const EndpointId& endpointId) override
   {
     this->sentInterests.push_back(interest);
     this->sentInterests.back().setTag(std::make_shared<TopologyPcapTimestamp>(time::steady_clock::now()));
-    this->GenericLinkService::doSendInterest(interest);
+    this->GenericLinkService::doSendInterest(interest, endpointId);
   }
 
   void
-  doSendData(const Data& data) override
+  doSendData(const Data& data, const EndpointId& endpointId) override
   {
     this->sentData.push_back(data);
     this->sentData.back().setTag(std::make_shared<TopologyPcapTimestamp>(time::steady_clock::now()));
-    this->GenericLinkService::doSendData(data);
+    this->GenericLinkService::doSendData(data, endpointId);
   }
 
   void
-  doSendNack(const lp::Nack& nack) override
+  doSendNack(const lp::Nack& nack, const EndpointId& endpointId) override
   {
     this->sentNacks.push_back(nack);
     this->sentNacks.back().setTag(std::make_shared<TopologyPcapTimestamp>(time::steady_clock::now()));
-    this->GenericLinkService::doSendNack(nack);
+    this->GenericLinkService::doSendNack(nack, endpointId);
   }
 };
 
@@ -166,10 +197,20 @@ TopologyNode
 TopologyTester::addForwarder(const std::string& label)
 {
   size_t i = m_forwarders.size();
-  m_forwarders.push_back(make_unique<Forwarder>());
-  m_forwarderLabels.push_back(label);
-  BOOST_ASSERT(m_forwarders.size() == m_forwarderLabels.size());
+  m_forwarders.push_back(make_unique<TopologyForwarder>(label));
   return i;
+}
+
+shared_ptr<Face>
+TopologyTester::makeFace(TopologyNode i, const FaceUri& localUri, const FaceUri& remoteUri,
+                         ndn::nfd::FaceScope scope, ndn::nfd::LinkType linkType)
+{
+  unique_ptr<GenericLinkService> service = m_wantPcap ? make_unique<TopologyPcapLinkService>() :
+                                                        make_unique<GenericLinkService>();
+  auto transport = make_unique<InternalForwarderTransport>(localUri, remoteUri, scope, linkType);
+  auto face = make_shared<Face>(std::move(service), std::move(transport));
+  m_forwarders.at(i)->faceTable.add(face);
+  return face;
 }
 
 shared_ptr<TopologyLink>
@@ -186,16 +227,8 @@ TopologyTester::addLink(const std::string& label, time::nanoseconds delay,
   BOOST_ASSERT(forwarders.size() <= 2 || linkType != ndn::nfd::LINK_TYPE_POINT_TO_POINT);
 
   for (TopologyNode i : forwarders) {
-    Forwarder& forwarder = this->getForwarder(i);
-    FaceUri localUri("topology://" + m_forwarderLabels.at(i) + "/" + label);
-
-    unique_ptr<GenericLinkService> service = m_wantPcap ? make_unique<TopologyPcapLinkService>() :
-                                                          make_unique<GenericLinkService>();
-    auto transport = make_unique<InternalForwarderTransport>(localUri, remoteUri,
-                     ndn::nfd::FACE_SCOPE_NON_LOCAL, linkType);
-    auto face = make_shared<Face>(std::move(service), std::move(transport));
-
-    forwarder.addFace(face);
+    FaceUri localUri("topology://" + m_forwarders.at(i)->label + "/" + label);
+    auto face = makeFace(i, localUri, remoteUri, ndn::nfd::FACE_SCOPE_NON_LOCAL, linkType);
     link->addFace(i, std::move(face));
   }
 
@@ -206,17 +239,9 @@ TopologyTester::addLink(const std::string& label, time::nanoseconds delay,
 shared_ptr<TopologyAppLink>
 TopologyTester::addAppFace(const std::string& label, TopologyNode i)
 {
-  Forwarder& forwarder = this->getForwarder(i);
-  FaceUri localUri("topology://" + m_forwarderLabels.at(i) + "/local/" + label);
-  FaceUri remoteUri("topology://" + m_forwarderLabels.at(i) + "/app/" + label);
-
-  unique_ptr<GenericLinkService> service = m_wantPcap ? make_unique<TopologyPcapLinkService>() :
-                                                        make_unique<GenericLinkService>();
-  auto transport = make_unique<InternalForwarderTransport>(localUri, remoteUri,
-                   ndn::nfd::FACE_SCOPE_LOCAL, ndn::nfd::LINK_TYPE_POINT_TO_POINT);
-  auto face = make_shared<Face>(std::move(service), std::move(transport));
-
-  forwarder.addFace(face);
+  FaceUri localUri("topology://" + m_forwarders.at(i)->label + "/local/" + label);
+  FaceUri remoteUri("topology://" + m_forwarders.at(i)->label + "/app/" + label);
+  auto face = makeFace(i, localUri, remoteUri, ndn::nfd::FACE_SCOPE_LOCAL, ndn::nfd::LINK_TYPE_POINT_TO_POINT);
 
   auto al = make_shared<TopologyAppLink>(std::move(face));
   m_appLinks.push_back(al); // keep a shared_ptr so callers don't have to
@@ -231,10 +256,17 @@ TopologyTester::addAppFace(const std::string& label, TopologyNode i, const Name&
   return al;
 }
 
-void
-TopologyTester::enablePcap(bool isEnabled)
+shared_ptr<TopologyBareLink>
+TopologyTester::addBareLink(const std::string& label, TopologyNode i, ndn::nfd::FaceScope scope,
+                            ndn::nfd::LinkType linkType)
 {
-  m_wantPcap = isEnabled;
+  FaceUri localUri("topology://" + m_forwarders.at(i)->label + "/local/" + label);
+  FaceUri remoteUri("topology://" + m_forwarders.at(i)->label + "/bare/" + label);
+  auto face = makeFace(i, localUri, remoteUri, scope, linkType);
+
+  auto bl = make_shared<TopologyBareLink>(std::move(face));
+  m_bareLinks.push_back(bl); // keep a shared_ptr so callers don't have to
+  return bl;
 }
 
 TopologyPcap&
@@ -248,7 +280,8 @@ TopologyTester::registerPrefix(TopologyNode i, const Face& face, const Name& pre
 {
   Forwarder& forwarder = this->getForwarder(i);
   Fib& fib = forwarder.getFib();
-  fib.insert(prefix).first->addOrUpdateNextHop(const_cast<Face&>(face), 0, cost);
+  fib::Entry* entry = fib.insert(prefix).first;
+  fib.addOrUpdateNextHop(*entry, const_cast<Face&>(face), cost);
 }
 
 void

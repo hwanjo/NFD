@@ -26,15 +26,12 @@
 #ifndef NFD_DAEMON_FACE_LP_REASSEMBLER_HPP
 #define NFD_DAEMON_FACE_LP_REASSEMBLER_HPP
 
-#include "face-log.hpp"
-#include "transport.hpp"
+#include "face-common.hpp"
 
 #include <ndn-cxx/lp/packet.hpp>
 
 namespace nfd {
 namespace face {
-
-class LinkService;
 
 /** \brief reassembles fragmented network-layer packets
  *  \sa https://redmine.named-data.net/projects/nfd/wiki/NDNLPv2
@@ -72,13 +69,13 @@ public:
   const LinkService*
   getLinkService() const;
 
-  /** \brief adds received fragment to buffer
-   *  \param remoteEndpoint endpoint whose sends the packet
-   *  \param packet received fragment;
-   *                must have Fragment field
-   *  \return whether network-layer packet has been completely received,
+  /** \brief adds received fragment to the buffer
+   *  \param remoteEndpoint endpoint that sent the packet
+   *  \param packet received fragment; must have Fragment field
+   *  \return a tuple containing:
+   *          whether a network-layer packet has been completely received,
    *          the reassembled network-layer packet,
-   *          and the first fragment for inspecting other NDNLPv2 headers
+   *          the first fragment for inspecting other NDNLPv2 headers
    *  \throw tlv::Error packet is malformed
    */
   std::tuple<bool, Block, lp::Packet>

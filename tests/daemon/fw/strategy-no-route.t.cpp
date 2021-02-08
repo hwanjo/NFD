@@ -33,6 +33,7 @@
 #include "fw/asf-strategy.hpp"
 #include "fw/best-route-strategy2.hpp"
 #include "fw/multicast-strategy.hpp"
+#include "fw/random-strategy.hpp"
 
 #include "tests/test-common.hpp"
 #include "tests/daemon/face/dummy-face.hpp"
@@ -52,19 +53,21 @@ class StrategyNoRouteFixture : public GlobalIoTimeFixture
 public:
   StrategyNoRouteFixture()
     : limitedIo(this)
+    , forwarder(faceTable)
     , strategy(choose<StrategyTester<S>>(forwarder))
     , fib(forwarder.getFib())
     , pit(forwarder.getPit())
     , face1(make_shared<DummyFace>())
     , face2(make_shared<DummyFace>())
   {
-    forwarder.addFace(face1);
-    forwarder.addFace(face2);
+    faceTable.add(face1);
+    faceTable.add(face2);
   }
 
 public:
   LimitedIo limitedIo;
 
+  FaceTable faceTable;
   Forwarder forwarder;
   StrategyTester<S>& strategy;
   Fib& fib;
@@ -115,7 +118,8 @@ public:
   void
   insertFibEntry(StrategyNoRouteFixture<S>* fixture)
   {
-    fixture->fib.insert(Name()).first->addOrUpdateNextHop(*fixture->face1, 0, 10);
+    fib::Entry* entry = fixture->fib.insert(Name()).first;
+    fixture->fib.addOrUpdateNextHop(*entry, *fixture->face1, 10);
   }
 };
 
@@ -132,7 +136,8 @@ public:
   void
   insertFibEntry(StrategyNoRouteFixture<S>* fixture)
   {
-    fixture->fib.insert("/localhop").first->addOrUpdateNextHop(*fixture->face2, 0, 10);
+    fib::Entry* entry = fixture->fib.insert("/localhop").first;
+    fixture->fib.addOrUpdateNextHop(*entry, *fixture->face2, 10);
     // face1 and face2 are both non-local; Interest from face1 cannot be forwarded to face2
   }
 };
@@ -148,7 +153,11 @@ using Tests = boost::mpl::vector<
 
   Test<MulticastStrategy, EmptyNextHopList<MulticastStrategy>>,
   Test<MulticastStrategy, NextHopIsDownstream<MulticastStrategy>>,
-  Test<MulticastStrategy, NextHopViolatesScope<MulticastStrategy>>
+  Test<MulticastStrategy, NextHopViolatesScope<MulticastStrategy>>,
+
+  Test<RandomStrategy, EmptyNextHopList<RandomStrategy>>,
+  Test<RandomStrategy, NextHopIsDownstream<RandomStrategy>>,
+  Test<RandomStrategy, NextHopViolatesScope<RandomStrategy>>
 >;
 
 BOOST_FIXTURE_TEST_CASE_TEMPLATE(IncomingInterest, T, Tests,
@@ -157,19 +166,22 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(IncomingInterest, T, Tests,
   typename T::Case scenario;
   scenario.insertFibEntry(this);
 
-  shared_ptr<Interest> interest = makeInterest(scenario.getInterestName());
-  shared_ptr<pit::Entry> pitEntry = this->pit.insert(*interest).first;
-  pitEntry->insertOrUpdateInRecord(*this->face1, 0, *interest);
+  auto interest = makeInterest(scenario.getInterestName());
+  auto pitEntry = this->pit.insert(*interest).first;
+  pitEntry->insertOrUpdateInRecord(*this->face1, *interest);
 
-  BOOST_REQUIRE(this->strategy.waitForAction(
-    [&] { this->strategy.afterReceiveInterest(FaceEndpoint(*this->face1, 0), *interest, pitEntry); },
-    this->limitedIo, 2));
+  auto f = [&] {
+    this->strategy.afterReceiveInterest(FaceEndpoint(*this->face1, 0), *interest, pitEntry);
+  };
+  BOOST_REQUIRE(this->strategy.waitForAction(f, this->limitedIo, 2));
 
   BOOST_REQUIRE_EQUAL(this->strategy.rejectPendingInterestHistory.size(), 1);
-  BOOST_CHECK_EQUAL(this->strategy.rejectPendingInterestHistory[0].pitInterest, pitEntry->getInterest());
+  BOOST_CHECK_EQUAL(this->strategy.rejectPendingInterestHistory[0].pitInterest.wireEncode(),
+                    pitEntry->getInterest().wireEncode());
 
   BOOST_REQUIRE_EQUAL(this->strategy.sendNackHistory.size(), 1);
-  BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[0].pitInterest, pitEntry->getInterest());
+  BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[0].pitInterest.wireEncode(),
+                    pitEntry->getInterest().wireEncode());
   BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[0].outFaceId, this->face1->getId());
   BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[0].header.getReason(), lp::NackReason::NO_ROUTE);
 }

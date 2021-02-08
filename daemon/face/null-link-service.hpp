@@ -37,22 +37,22 @@ class NullLinkService final : public LinkService
 {
 private:
   void
-  doSendInterest(const Interest&) final
+  doSendInterest(const Interest&, const EndpointId&) final
   {
   }
 
   void
-  doSendData(const Data&) final
+  doSendData(const Data&, const EndpointId&) final
   {
   }
 
   void
-  doSendNack(const lp::Nack&) final
+  doSendNack(const lp::Nack&, const EndpointId&) final
   {
   }
 
   void
-  doReceivePacket(Transport::Packet&&) final
+  doReceivePacket(const Block&, const EndpointId&) final
   {
   }
 };

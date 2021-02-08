@@ -30,6 +30,7 @@
 // Strategies implementing recommended Nack processing procedure, sorted alphabetically.
 #include "fw/best-route-strategy2.hpp"
 #include "fw/multicast-strategy.hpp"
+#include "fw/random-strategy.hpp"
 
 #include "choose-strategy.hpp"
 #include "strategy-tester.hpp"
@@ -50,6 +51,7 @@ class StrategyNackReturnFixture : public GlobalIoTimeFixture
 public:
   StrategyNackReturnFixture()
     : limitedIo(this)
+    , forwarder(faceTable)
     , strategy(choose<StrategyTester<S>>(forwarder))
     , fib(forwarder.getFib())
     , pit(forwarder.getPit())
@@ -59,16 +61,17 @@ public:
     , face4(make_shared<DummyFace>())
     , face5(make_shared<DummyFace>())
   {
-    forwarder.addFace(face1);
-    forwarder.addFace(face2);
-    forwarder.addFace(face3);
-    forwarder.addFace(face4);
-    forwarder.addFace(face5);
+    faceTable.add(face1);
+    faceTable.add(face2);
+    faceTable.add(face3);
+    faceTable.add(face4);
+    faceTable.add(face5);
   }
 
 public:
   LimitedIo limitedIo;
 
+  FaceTable faceTable;
   Forwarder forwarder;
   StrategyTester<S>& strategy;
   Fib& fib;
@@ -85,7 +88,8 @@ BOOST_AUTO_TEST_SUITE(TestStrategyNackReturn)
 
 using Strategies = boost::mpl::vector<
   BestRouteStrategy2,
-  MulticastStrategy
+  MulticastStrategy,
+  RandomStrategy
 >;
 
 // one upstream, send Nack when Nack arrives
@@ -93,31 +97,35 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(OneUpstream,
                                  S, Strategies, StrategyNackReturnFixture<S>)
 {
   fib::Entry& fibEntry = *this->fib.insert(Name()).first;
-  fibEntry.addOrUpdateNextHop(*this->face3, 0, 10);
-  fibEntry.addOrUpdateNextHop(*this->face4, 0, 20);
-  fibEntry.addOrUpdateNextHop(*this->face5, 0, 30);
+  this->fib.addOrUpdateNextHop(fibEntry, *this->face3, 10);
+  this->fib.addOrUpdateNextHop(fibEntry, *this->face4, 20);
+  this->fib.addOrUpdateNextHop(fibEntry, *this->face5, 30);
 
-  shared_ptr<Interest> interest1 = makeInterest("/McQYjMbm", 992);
-  shared_ptr<Interest> interest2 = makeInterest("/McQYjMbm", 114);
+  auto interest1 = makeInterest("/McQYjMbm", false, nullopt, 992);
+  auto interest2 = makeInterest("/McQYjMbm", false, nullopt, 114);
   shared_ptr<pit::Entry> pitEntry = this->pit.insert(*interest1).first;
-  pitEntry->insertOrUpdateInRecord(*this->face1, 0, *interest1);
-  pitEntry->insertOrUpdateInRecord(*this->face2, 0, *interest2);
-  pitEntry->insertOrUpdateOutRecord(*this->face3, 0, *interest1);
+  pitEntry->insertOrUpdateInRecord(*this->face1, *interest1);
+  pitEntry->insertOrUpdateInRecord(*this->face2, *interest2);
+  pitEntry->insertOrUpdateOutRecord(*this->face3, *interest1);
 
-  lp::Nack nack3 = makeNack("/McQYjMbm", 992, lp::NackReason::CONGESTION);
-  pitEntry->getOutRecord(*this->face3, 0)->setIncomingNack(nack3);
+  lp::Nack nack3 = makeNack(*interest1, lp::NackReason::CONGESTION);
+  pitEntry->getOutRecord(*this->face3)->setIncomingNack(nack3);
 
-  BOOST_REQUIRE(this->strategy.waitForAction(
-    [&] { this->strategy.afterReceiveNack(FaceEndpoint(*this->face3, 0), nack3, pitEntry); },
-    this->limitedIo, 2));
+  auto f = [&] {
+    this->strategy.afterReceiveNack(FaceEndpoint(*this->face3, 0), nack3, pitEntry);
+  };
+  BOOST_REQUIRE(this->strategy.waitForAction(f, this->limitedIo, 2));
 
   BOOST_REQUIRE_EQUAL(this->strategy.sendNackHistory.size(), 2);
-  BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[0].pitInterest, pitEntry->getInterest());
+  BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[0].pitInterest.wireEncode(),
+                    pitEntry->getInterest().wireEncode());
   BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[0].header.getReason(), lp::NackReason::CONGESTION);
-  BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[1].pitInterest, pitEntry->getInterest());
+  BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[1].pitInterest.wireEncode(),
+                    pitEntry->getInterest().wireEncode());
   BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[1].header.getReason(), lp::NackReason::CONGESTION);
+
   std::set<FaceId> nackFaceIds{this->strategy.sendNackHistory[0].outFaceId,
-                                         this->strategy.sendNackHistory[1].outFaceId};
+                               this->strategy.sendNackHistory[1].outFaceId};
   std::set<FaceId> expectedNackFaceIds{this->face1->getId(), this->face2->getId()};
   BOOST_CHECK_EQUAL_COLLECTIONS(nackFaceIds.begin(), nackFaceIds.end(),
                                 expectedNackFaceIds.begin(), expectedNackFaceIds.end());
@@ -128,30 +136,33 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(TwoUpstreams,
                                  S, Strategies, StrategyNackReturnFixture<S>)
 {
   fib::Entry& fibEntry = *this->fib.insert(Name()).first;
-  fibEntry.addOrUpdateNextHop(*this->face3, 0, 10);
-  fibEntry.addOrUpdateNextHop(*this->face4, 0, 20);
-  fibEntry.addOrUpdateNextHop(*this->face5, 0, 30);
+  this->fib.addOrUpdateNextHop(fibEntry, *this->face3, 10);
+  this->fib.addOrUpdateNextHop(fibEntry, *this->face4, 20);
+  this->fib.addOrUpdateNextHop(fibEntry, *this->face5, 30);
 
-  shared_ptr<Interest> interest1 = makeInterest("/aS9FAyUV19", 286);
+  auto interest1 = makeInterest("/aS9FAyUV19", 286);
   shared_ptr<pit::Entry> pitEntry = this->pit.insert(*interest1).first;
-  pitEntry->insertOrUpdateInRecord(*this->face1, 0, *interest1);
-  pitEntry->insertOrUpdateOutRecord(*this->face3, 0, *interest1);
-  pitEntry->insertOrUpdateOutRecord(*this->face4, 0, *interest1);
+  pitEntry->insertOrUpdateInRecord(*this->face1, *interest1);
+  pitEntry->insertOrUpdateOutRecord(*this->face3, *interest1);
+  pitEntry->insertOrUpdateOutRecord(*this->face4, *interest1);
 
-  lp::Nack nack3 = makeNack("/aS9FAyUV19", 286, lp::NackReason::CONGESTION);
-  pitEntry->getOutRecord(*this->face3, 0)->setIncomingNack(nack3);
+  lp::Nack nack3 = makeNack(*interest1, lp::NackReason::CONGESTION);
+  pitEntry->getOutRecord(*this->face3)->setIncomingNack(nack3);
   this->strategy.afterReceiveNack(FaceEndpoint(*this->face3, 0), nack3, pitEntry);
 
   BOOST_CHECK_EQUAL(this->strategy.sendNackHistory.size(), 0); // don't send Nack until all upstreams have Nacked
 
-  lp::Nack nack4 = makeNack("/aS9FAyUV19", 286, lp::NackReason::CONGESTION);
-  pitEntry->getOutRecord(*this->face4, 0)->setIncomingNack(nack4);
-  BOOST_REQUIRE(this->strategy.waitForAction(
-    [&] { this->strategy.afterReceiveNack(FaceEndpoint(*this->face4, 0), nack4, pitEntry); },
-    this->limitedIo));
+  lp::Nack nack4 = makeNack(*interest1, lp::NackReason::CONGESTION);
+  pitEntry->getOutRecord(*this->face4)->setIncomingNack(nack4);
+
+  auto f = [&] {
+    this->strategy.afterReceiveNack(FaceEndpoint(*this->face4, 0), nack4, pitEntry);
+  };
+  BOOST_REQUIRE(this->strategy.waitForAction(f, this->limitedIo));
 
   BOOST_REQUIRE_EQUAL(this->strategy.sendNackHistory.size(), 1);
-  BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[0].pitInterest, pitEntry->getInterest());
+  BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[0].pitInterest.wireEncode(),
+                    pitEntry->getInterest().wireEncode());
   BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[0].outFaceId, this->face1->getId());
   BOOST_CHECK_EQUAL(this->strategy.sendNackHistory[0].header.getReason(), lp::NackReason::CONGESTION);
 }
@@ -161,25 +172,24 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(Timeout,
                                  S, Strategies, StrategyNackReturnFixture<S>)
 {
   fib::Entry& fibEntry = *this->fib.insert(Name()).first;
-  fibEntry.addOrUpdateNextHop(*this->face3, 0, 10);
-  fibEntry.addOrUpdateNextHop(*this->face4, 0, 20);
-  fibEntry.addOrUpdateNextHop(*this->face5, 0, 30);
+  this->fib.addOrUpdateNextHop(fibEntry, *this->face3, 10);
+  this->fib.addOrUpdateNextHop(fibEntry, *this->face4, 20);
+  this->fib.addOrUpdateNextHop(fibEntry, *this->face5, 30);
 
-  shared_ptr<Interest> interest1 = makeInterest("/sIYw0TXWDj", 115);
-  interest1->setInterestLifetime(400_ms);
+  auto interest1 = makeInterest("/sIYw0TXWDj", false, 400_ms, 115);
   shared_ptr<pit::Entry> pitEntry = this->pit.insert(*interest1).first;
-  pitEntry->insertOrUpdateInRecord(*this->face1, 0, *interest1);
-  pitEntry->insertOrUpdateOutRecord(*this->face3, 0, *interest1);
+  pitEntry->insertOrUpdateInRecord(*this->face1, *interest1);
+  pitEntry->insertOrUpdateOutRecord(*this->face3, *interest1);
 
   this->advanceClocks(300_ms);
-  shared_ptr<Interest> interest2 = makeInterest("/sIYw0TXWDj", 223);
-  pitEntry->insertOrUpdateInRecord(*this->face1, 0, *interest2);
-  pitEntry->insertOrUpdateOutRecord(*this->face4, 0, *interest2);
+  auto interest2 = makeInterest("/sIYw0TXWDj", false, nullopt, 223);
+  pitEntry->insertOrUpdateInRecord(*this->face1, *interest2);
+  pitEntry->insertOrUpdateOutRecord(*this->face4, *interest2);
 
   this->advanceClocks(200_ms); // face3 has timed out
 
-  lp::Nack nack4 = makeNack("/sIYw0TXWDj", 223, lp::NackReason::CONGESTION);
-  pitEntry->getOutRecord(*this->face4, 0)->setIncomingNack(nack4);
+  lp::Nack nack4 = makeNack(*interest2, lp::NackReason::CONGESTION);
+  pitEntry->getOutRecord(*this->face4)->setIncomingNack(nack4);
   this->strategy.afterReceiveNack(FaceEndpoint(*this->face4, 0), nack4, pitEntry);
 
   BOOST_CHECK_EQUAL(this->strategy.sendNackHistory.size(), 0);
@@ -255,11 +265,11 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(LiveDeadlock,
   ndn::Face& appD = topo.addAppFace("D", nodeD)->getClientFace();
 
   int nNacksA = 0, nNacksD = 0;
-  appA.expressInterest(Interest("/P/1"), nullptr, bind([&nNacksA] { ++nNacksA; }), nullptr);
-  appD.expressInterest(Interest("/P/1"), nullptr, bind([&nNacksD] { ++nNacksD; }), nullptr);
+  appA.expressInterest(*makeInterest("/P/1"), nullptr, bind([&nNacksA] { ++nNacksA; }), nullptr);
+  appD.expressInterest(*makeInterest("/P/1"), nullptr, bind([&nNacksD] { ++nNacksD; }), nullptr);
   this->advanceClocks(1_ms, 5_ms);
-  appA.expressInterest(Interest("/P/1"), nullptr, bind([&nNacksA] { ++nNacksA; }), nullptr);
-  appD.expressInterest(Interest("/P/1"), nullptr, bind([&nNacksD] { ++nNacksD; }), nullptr);
+  appA.expressInterest(*makeInterest("/P/1"), nullptr, bind([&nNacksA] { ++nNacksA; }), nullptr);
+  appD.expressInterest(*makeInterest("/P/1"), nullptr, bind([&nNacksD] { ++nNacksD; }), nullptr);
   this->advanceClocks(1_ms, 100_ms);
 
   // As long as at least one Nack arrives at each client, strategy behavior is correct.
@@ -314,28 +324,29 @@ BOOST_FIXTURE_TEST_CASE_TEMPLATE(CombineReasons, Combination, NackReasonCombinat
                                  StrategyNackReturnFixture<BestRouteStrategy2>)
 {
   fib::Entry& fibEntry = *fib.insert(Name()).first;
-  fibEntry.addOrUpdateNextHop(*face3, 0, 10);
-  fibEntry.addOrUpdateNextHop(*face4, 0, 20);
-  fibEntry.addOrUpdateNextHop(*face5, 0, 30);
+  fib.addOrUpdateNextHop(fibEntry, *face3, 10);
+  fib.addOrUpdateNextHop(fibEntry, *face4, 20);
+  fib.addOrUpdateNextHop(fibEntry, *face5, 30);
 
-  shared_ptr<Interest> interest1 = makeInterest("/F6sEwB24I", 282);
+  auto interest1 = makeInterest("/F6sEwB24I", false, nullopt, 282);
   shared_ptr<pit::Entry> pitEntry = pit.insert(*interest1).first;
-  pitEntry->insertOrUpdateInRecord(*face1, 0, *interest1);
-  pitEntry->insertOrUpdateOutRecord(*face3, 0, *interest1);
-  pitEntry->insertOrUpdateOutRecord(*face4, 0, *interest1);
+  pitEntry->insertOrUpdateInRecord(*face1, *interest1);
+  pitEntry->insertOrUpdateOutRecord(*face3, *interest1);
+  pitEntry->insertOrUpdateOutRecord(*face4, *interest1);
 
   lp::Nack nack3 = makeNack(*interest1, Combination::getX());
-  pitEntry->getOutRecord(*face3, 0)->setIncomingNack(nack3);
+  pitEntry->getOutRecord(*face3)->setIncomingNack(nack3);
   strategy.afterReceiveNack(FaceEndpoint(*face3, 0), nack3, pitEntry);
 
   BOOST_CHECK_EQUAL(strategy.sendNackHistory.size(), 0);
 
   lp::Nack nack4 = makeNack(*interest1, Combination::getY());
-  pitEntry->getOutRecord(*face4, 0)->setIncomingNack(nack4);
+  pitEntry->getOutRecord(*face4)->setIncomingNack(nack4);
   strategy.afterReceiveNack(FaceEndpoint(*face4, 0), nack4, pitEntry);
 
   BOOST_REQUIRE_EQUAL(strategy.sendNackHistory.size(), 1);
-  BOOST_CHECK_EQUAL(strategy.sendNackHistory[0].pitInterest, pitEntry->getInterest());
+  BOOST_CHECK_EQUAL(strategy.sendNackHistory[0].pitInterest.wireEncode(),
+                    pitEntry->getInterest().wireEncode());
   BOOST_CHECK_EQUAL(strategy.sendNackHistory[0].outFaceId, face1->getId());
   BOOST_CHECK_EQUAL(strategy.sendNackHistory[0].header.getReason(), Combination::getExpectedResult());
 }

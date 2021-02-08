@@ -63,6 +63,7 @@
 #include <ndn-cxx/delegation-list.hpp>
 #include <ndn-cxx/interest.hpp>
 #include <ndn-cxx/name.hpp>
+#include <ndn-cxx/decent-name.hpp>
 #include <ndn-cxx/encoding/block.hpp>
 #include <ndn-cxx/lp/nack.hpp>
 #include <ndn-cxx/net/face-uri.hpp>
@@ -109,6 +110,7 @@ using ndn::DelegationList;
 using ndn::FaceUri;
 using ndn::Interest;
 using ndn::Name;
+using ndn::DecentName;
 using ndn::PartialName;
 using ndn::Scheduler;
 
@@ -124,6 +126,7 @@ namespace scheduler = ndn::scheduler;
 namespace signal = ndn::util::signal;
 namespace time = ndn::time;
 using namespace ndn::time_literals;
+using ndn::operator""_block;
 
 } // namespace nfd
 

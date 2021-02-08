@@ -99,6 +99,63 @@ public:
     return !this->hasChildren() && !this->hasTableEntries();
   }
 
+  /** \return Decent Head of this entry
+   */
+  Entry*
+  getDecentHead() const
+  {
+    return decentHead;
+  }
+
+  /** \brief Set Decent Head of this entry
+   */
+  void
+  setDecentHead(Entry *entry);
+
+  /** \return NdnTree of this entry
+   */
+  Entry*
+  getNdnTreeEntry() const
+  {
+    return ndnTreeEntry;
+  }
+
+  /** \brief Set NdnTree of this entry
+   */
+  void
+  setNdnTreeEntry(Entry *entry);
+
+  /** \return decent map corresponding to the decent name
+   */
+	std::list<Entry*>
+	getDecentMap(std::string decentName);
+
+  /** \set decent map corresponding to the decent name
+   */
+	void
+	setDecentMap(std::string decentName, std::list<Entry*> decentList);
+
+  /** \update decent map corresponding to the decent name
+   */
+	void
+	updateDecentMap(std::string decentName, std::list<Entry*> decentList);
+
+  /** \return whether Decent head
+   */
+	bool
+	getIsDecentHead()
+	{
+		return isDecentHead;
+	}
+
+  /** \set whether Decent head
+   */
+	void
+	setIsDecentHead(bool value)
+	{
+		isDecentHead = value;
+	}
+
 public: // attached table entries
   /** \retval true at least one table entries is attached
    *  \retval false no table entry is attached
@@ -168,6 +225,10 @@ private:
   Node* m_node;
   Entry* m_parent = nullptr;
   std::vector<Entry*> m_children;
+	Entry* decentHead = nullptr;
+	Entry* ndnTreeEntry = nullptr;
+	std::map<std::string, std::list<Entry*>> m_decentMap;
+	bool isDecentHead = false;
 
   unique_ptr<fib::Entry> m_fibEntry;
   std::vector<shared_ptr<pit::Entry>> m_pitEntries;

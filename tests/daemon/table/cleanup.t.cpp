@@ -49,15 +49,15 @@ BOOST_AUTO_TEST_CASE(Basic)
     Name name = Name("/P").appendVersion(i);
 
     fib::Entry* fibEntry = fib.insert(name).first;
-    fibEntry->addOrUpdateNextHop(*face1, 0, 0);
+    fib.addOrUpdateNextHop(*fibEntry, *face1, 0);
 
     shared_ptr<Interest> interest = makeInterest(name);
     shared_ptr<pit::Entry> pitEntry = pit.insert(*interest).first;
     if ((i & 0x01) != 0) {
-      pitEntry->insertOrUpdateInRecord(*face1, 0, *interest);
+      pitEntry->insertOrUpdateInRecord(*face1, *interest);
     }
     if ((i & 0x02) != 0) {
-      pitEntry->insertOrUpdateOutRecord(*face1, 0, *interest);
+      pitEntry->insertOrUpdateOutRecord(*face1, *interest);
     }
   }
   BOOST_CHECK_EQUAL(fib.size(), 300);
@@ -74,38 +74,39 @@ BOOST_AUTO_TEST_CASE(Basic)
 
 BOOST_AUTO_TEST_CASE(RemoveFibNexthops)
 {
-  Forwarder forwarder;
+  FaceTable faceTable;
+  Forwarder forwarder(faceTable);
   NameTree& nameTree = forwarder.getNameTree();
   Fib& fib = forwarder.getFib();
 
-  shared_ptr<Face> face1 = make_shared<DummyFace>();
-  shared_ptr<Face> face2 = make_shared<DummyFace>();
-  forwarder.addFace(face1);
-  forwarder.addFace(face2);
+  auto face1 = make_shared<DummyFace>();
+  auto face2 = make_shared<DummyFace>();
+  faceTable.add(face1);
+  faceTable.add(face2);
 
   // {}
   size_t nNameTreeEntriesBefore = nameTree.size();
   BOOST_CHECK_EQUAL(fib.size(), 0);
 
   fib::Entry* entryA = fib.insert("/A").first;
-  entryA->addOrUpdateNextHop(*face1, 0, 0);
-  entryA->addOrUpdateNextHop(*face2, 0, 0);
+  fib.addOrUpdateNextHop(*entryA, *face1, 0);
+  fib.addOrUpdateNextHop(*entryA, *face2, 0);
   // {'/A':[1,2]}
 
   fib::Entry* entryB = fib.insert("/B").first;
-  entryB->addOrUpdateNextHop(*face1, 0, 0);
+  fib.addOrUpdateNextHop(*entryB, *face1, 0);
   // {'/A':[1,2], '/B':[1]}
 
   fib::Entry* entryC = fib.insert("/C").first;
-  entryC->addOrUpdateNextHop(*face2, 0, 1);
+  fib.addOrUpdateNextHop(*entryC, *face2, 1);
   // {'/A':[1,2], '/B':[1], '/C':[2]}
 
   fib::Entry* entryB1 = fib.insert("/B/1").first;
-  entryB1->addOrUpdateNextHop(*face1, 0, 0);
+  fib.addOrUpdateNextHop(*entryB1, *face1, 0);
   // {'/A':[1,2], '/B':[1], '/B/1':[1], '/C':[2]}
 
   fib::Entry* entryB12 = fib.insert("/B/1/2").first;
-  entryB12->addOrUpdateNextHop(*face1, 0, 0);
+  fib.addOrUpdateNextHop(*entryB12, *face1, 0);
   // {'/A':[1,2], '/B':[1], '/B/1':[1], '/B/1/2':[1], '/C':[2]}
 
   // ---- close face1 ----
@@ -130,35 +131,36 @@ BOOST_AUTO_TEST_CASE(RemoveFibNexthops)
 
 BOOST_AUTO_TEST_CASE(DeletePitInOutRecords)
 {
-  Forwarder forwarder;
+  FaceTable faceTable;
+  Forwarder forwarder(faceTable);
   Pit& pit = forwarder.getPit();
 
-  shared_ptr<Face> face1 = make_shared<DummyFace>();
-  shared_ptr<Face> face2 = make_shared<DummyFace>();
-  forwarder.addFace(face1);
-  forwarder.addFace(face2);
+  auto face1 = make_shared<DummyFace>();
+  auto face2 = make_shared<DummyFace>();
+  faceTable.add(face1);
+  faceTable.add(face2);
 
   // {}
   BOOST_CHECK_EQUAL(pit.size(), 0);
 
   shared_ptr<Interest> interestA = makeInterest("/A");
   shared_ptr<pit::Entry> entryA = pit.insert(*interestA).first;
-  entryA->insertOrUpdateInRecord(*face1, 0, *interestA);
-  entryA->insertOrUpdateInRecord(*face2, 0, *interestA);
-  entryA->insertOrUpdateOutRecord(*face1, 0, *interestA);
-  entryA->insertOrUpdateOutRecord(*face2, 0, *interestA);
+  entryA->insertOrUpdateInRecord(*face1, *interestA);
+  entryA->insertOrUpdateInRecord(*face2, *interestA);
+  entryA->insertOrUpdateOutRecord(*face1, *interestA);
+  entryA->insertOrUpdateOutRecord(*face2, *interestA);
   // {'/A':[1,2]}
 
   shared_ptr<Interest> interestB = makeInterest("/B");
   shared_ptr<pit::Entry> entryB = pit.insert(*interestB).first;
-  entryB->insertOrUpdateInRecord(*face1, 0, *interestB);
-  entryB->insertOrUpdateOutRecord(*face1, 0, *interestB);
+  entryB->insertOrUpdateInRecord(*face1, *interestB);
+  entryB->insertOrUpdateOutRecord(*face1, *interestB);
   // {'/A':[1,2], '/B':[1]}
 
   shared_ptr<Interest> interestC = makeInterest("/C");
   shared_ptr<pit::Entry> entryC = pit.insert(*interestC).first;
-  entryC->insertOrUpdateInRecord(*face2, 0, *interestC);
-  entryC->insertOrUpdateOutRecord(*face2, 0, *interestC);
+  entryC->insertOrUpdateInRecord(*face2, *interestC);
+  entryC->insertOrUpdateOutRecord(*face2, *interestC);
   // {'/A':[1,2], '/B':[1], '/C':[2]}
   BOOST_CHECK_EQUAL(pit.size(), 3);
 
